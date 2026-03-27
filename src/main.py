@@ -1928,6 +1928,25 @@ def main() -> int:
     control_rects: dict[str, pygame.Rect] = {}
     controls_area_rect = pygame.Rect(0, 0, 0, 0)
 
+    # Pre-populate control_rects before the first frame so that an early click
+    # (e.g. immediately after the splash) is never dropped due to empty rects.
+    _dummy = pygame.Surface(screen.get_size())
+    control_rects, controls_area_rect = draw_turn_controls(
+        _dummy,
+        panel_rect,
+        panel_rect.y + 64 + (len(players) + 1) * 82 + 44 + 12,
+        (0, 0),
+        players[active_player_index],
+        turn_state,
+        dice_faces,
+        0,
+        False,
+        False,
+        title_font,
+        text_font,
+    )
+    del _dummy
+
     # Debris is decorative and should be visible from the start.
     for definition in object_definitions:
         if definition.object_id != "debris":
