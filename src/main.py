@@ -8,6 +8,8 @@ from typing import TypeAlias
 
 import pygame
 
+import audio as audio_mod
+
 from board import (
     Board,
     GRID_COLS,
@@ -53,9 +55,6 @@ ASSETS_DIR = SRC_DIR.parent / "assets"
 SPLASH_IMAGE = ASSETS_DIR / "graphics" / "ui" / "box.jpg"
 QUESTS_DIR = SRC_DIR.parent / "data" / "quests"
 DEBUG_DEFAULT_QUEST = QUESTS_DIR / "quest1.json"
-SFX_DIR = ASSETS_DIR / "audio" / "sfx"
-MUSIC_DIR = ASSETS_DIR / "audio" / "music"
-
 DOOR_MASK_TO_DIR = {1: "W", 2: "N", 4: "E", 8: "S"}
 DOOR_VALID_MASK = 1 | 2 | 4 | 8
 DoorKey: TypeAlias = tuple[int, int, str]
@@ -86,15 +85,6 @@ def load_quest_payload(path: pathlib.Path) -> dict | None:
         return None
     with path.open() as file:
         return json.load(file)
-
-
-def load_sound(path: pathlib.Path) -> pygame.mixer.Sound | None:
-    if not path.exists():
-        return None
-    try:
-        return pygame.mixer.Sound(str(path))
-    except pygame.error:
-        return None
 
 
 def validate_quest_objects(
@@ -1760,12 +1750,6 @@ def draw_panel_transition(screen: pygame.Surface, panel_rect: pygame.Rect, trans
     if not target_rect:
         return
     progress = transition["elapsed"] / max(1, transition["duration"])
-    # One-way fade-in: start dark and clear to transparent.
-    alpha = int(190 * (1 - progress))
-    overlay = pygame.Surface(target_rect.size, pygame.SRCALPHA)
-    overlay.fill((*PANEL_TRANSITION_COLOR, alpha))
-    screen.blit(overlay, target_rect.topleft)
-
 
 def new_turn_state() -> dict:
     return {
@@ -1844,69 +1828,11 @@ def main() -> int:
 
     pygame.init()
 
-    audio_enabled = True
-    try:
-        pygame.mixer.init()
-    except pygame.error:
-        audio_enabled = False
+    audio_mod.init_audio(cfg)
 
-    sounds_enabled = bool(cfg.get("SOUNDS", True))
-    music_enabled = bool(cfg.get("MUSIC", True))
-
-    sfx: dict[str, pygame.mixer.Sound] = {}
-    music_tracks: list[pathlib.Path] = []
-    current_music_track: pathlib.Path | None = None
-
-    if audio_enabled:
-        sfx = {
-            "click": load_sound(SFX_DIR / "click.wav"),
-            "dice_roll": load_sound(SFX_DIR / "dice_roll.mp3"),
-            "door_open": load_sound(SFX_DIR / "door_open.mp3"),
-            "move": load_sound(SFX_DIR / "move.mp3"),
-        }
-        music_tracks = [
-            track
-            for track in sorted(MUSIC_DIR.iterdir())
-            if track.is_file() and track.suffix.lower() in {".mp3", ".wav", ".ogg"}
-        ]
-
-    def play_sfx(effect_name: str) -> None:
-        if not audio_enabled or not sounds_enabled:
-            return
-        sound = sfx.get(effect_name)
-        if sound is not None:
-            sound.play()
-
-    sound_cache: dict[pathlib.Path, pygame.mixer.Sound] = {}
-
-    def play_named_sound(file_name: str) -> None:
-        if not audio_enabled or not sounds_enabled or not file_name:
-            return
-        sound_path = SFX_DIR / file_name
-        sound = sound_cache.get(sound_path)
-        if sound is None:
-            sound = load_sound(sound_path)
-            if sound is None:
-                return
-            sound_cache[sound_path] = sound
-        sound.play()
-
-    def play_random_music_track() -> None:
-        nonlocal current_music_track
-        if not audio_enabled or not music_enabled or not music_tracks:
-            return
-        choices = [track for track in music_tracks if track != current_music_track] or music_tracks
-        selected = random.choice(choices)
-        try:
-            pygame.mixer.music.load(str(selected))
-            pygame.mixer.music.play()
-            current_music_track = selected
-        except pygame.error:
-            return
-
-    if audio_enabled and music_enabled and music_tracks:
+    if audio_mod.audio_enabled and audio_mod.music_enabled and audio_mod.music_tracks:
         pygame.mixer.music.set_endevent(MUSIC_END_EVENT)
-        play_random_music_track()
+        audio_mod.play_random_music_track()
 
     screen = pygame.display.set_mode(WINDOW_SIZE)
     pygame.display.set_caption("Hero Quest")
@@ -2048,7 +1974,7 @@ def main() -> int:
             if event.type == pygame.QUIT:
                 running = False
             if event.type == MUSIC_END_EVENT:
-                play_random_music_track()
+                audio_mod.play_random_music_track()
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                 running = False
             if event.type == pygame.KEYDOWN and args.debug and event.key == pygame.K_v:
@@ -2083,7 +2009,7 @@ def main() -> int:
                         phase = int(dialog.get("phase", 0))
                         outcome = dialog["outcome"]
                         if phase == 0:
-                            play_sfx("dice_roll")
+                            audio_mod.play_sfx("dice_roll")
                             dialog["attacker_rotations"] = roll_dice_rotations(len(outcome["attack_rolls"]))
                             # Queue individual dice SFX (sword) to play with 1s spacing
                             sfx_list: list[str] = ["sword.mp3" for _ in range(int(outcome["skulls"]))]
@@ -2092,7 +2018,7 @@ def main() -> int:
                             dialog["sfx_next_time"] = pygame.time.get_ticks() + 1000
                             dialog["phase"] = 1
                         elif phase == 1:
-                            play_sfx("dice_roll")
+                            audio_mod.play_sfx("dice_roll")
                             dialog["defender_rotations"] = roll_dice_rotations(len(outcome["defense_rolls"]))
                             # Queue defender sfx (shield then damage) with 1s spacing
                             sfx_list = ["shield.mp3" for _ in range(int(outcome["saves"]))]
@@ -2165,7 +2091,7 @@ def main() -> int:
                         reveal_all,
                     )
                     if opened_door:
-                        play_sfx("door_open")
+                        audio_mod.play_sfx("door_open")
                         reveal_room_from_opened_door(
                             opened_door,
                             door_states,
@@ -2217,7 +2143,7 @@ def main() -> int:
                                     visible_doors,
                                     visible_enemies,
                                 )
-                            play_sfx("move")
+                            audio_mod.play_sfx("move")
                             turn_state["move_points"] = max(0, turn_state["move_points"] - move_cost)
                             turn_state["moved"] = True
                             if turn_state["move_points"] > 0:
@@ -2242,10 +2168,10 @@ def main() -> int:
                         and not turn_state["moved"]
                         and not turn_state["move_locked"]
                     ):
-                        play_sfx("click")
+                        audio_mod.play_sfx("click")
                         die_one = random.randint(1, 6)
                         die_two = random.randint(1, 6)
-                        play_sfx("dice_roll")
+                        audio_mod.play_sfx("dice_roll")
                         # store random rotations for the two movement dice
                         turn_state["dice_rotations"] = roll_dice_rotations(2)
                         move_points = die_one + die_two
@@ -2278,7 +2204,7 @@ def main() -> int:
                         and not turn_state["acted"]
                         and turn_state["mode"] != "action"
                     ):
-                        play_sfx("click")
+                        audio_mod.play_sfx("click")
                         turn_state["mode"] = "action"
                         turn_state["reachable_cells"] = set()
                         turn_state["reachable_costs"] = {}
@@ -2286,7 +2212,7 @@ def main() -> int:
                         start_panel_transition(panel_transition, controls_area_rect)
 
                     if control_rects.get("pass_turn") and control_rects["pass_turn"].collidepoint(mouse_pos):
-                        play_sfx("click")
+                        audio_mod.play_sfx("click")
                         active_player_index = (active_player_index + 1) % len(players)
                         turn_state = new_turn_state()
                         active_player = players[active_player_index]
@@ -2310,13 +2236,13 @@ def main() -> int:
 
                                 handled_click = True
                                 if action_name.upper() == "ATTACK":
-                                    play_sfx("click")
+                                    audio_mod.play_sfx("click")
                                     turn_state["mode"] = "attack_target"
                                     turn_state["attack_candidates"] = attack_candidates
                                     start_panel_transition(panel_transition, controls_area_rect)
                                     break
 
-                                play_sfx("click")
+                                audio_mod.play_sfx("click")
                                 turn_state["acted"] = True
                                 turn_state["selected_action"] = action_name
                                 turn_state["mode"] = None
@@ -2507,7 +2433,7 @@ def main() -> int:
 
         pygame.display.flip()
 
-    if audio_enabled:
+    if audio_mod.audio_enabled:
         pygame.mixer.music.stop()
     pygame.quit()
     return 0
