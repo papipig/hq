@@ -1,0 +1,200 @@
+{
+    "heroes": [
+        {
+            "name": "Barbarian",
+            "hp": 8,
+            "attack_dice": 3,
+            "defense_dice": 2,
+            "mind": 2,
+            "icon_file": "barbarian.jpg",
+            "dying_sound": "dying_hero.mp3",
+            "color": [181, 73, 41]
+        },
+        {
+            "name": "Dwarf",
+            "hp": 7,
+            "attack_dice": 2,
+            "defense_dice": 2,
+            "mind": 3,
+            "icon_file": "dwarf.jpg",
+            "dying_sound": "dying_hero.mp3",
+            "color": [150, 112, 72]
+        },
+        {
+            "name": "Elf",
+            "hp": 6,
+            "attack_dice": 2,
+            "defense_dice": 2,
+            "mind": 4,
+            "icon_file": "elf.jpg",
+            "dying_sound": "dying_hero.mp3",
+            "color": [78, 133, 94]
+        },
+        {
+            "name": "Wizard",
+            "hp": 4,
+            "attack_dice": 1,
+            "defense_dice": 2,
+            "mind": 6,
+            "icon_file": "magician.jpg",
+            "dying_sound": "dying_hero.mp3",
+            "color": [89, 95, 168]
+        }
+    ],
+    "enemies": [
+        {
+            "name": "Chaos Warrior",
+            "hp": 1,
+            "attack_dice": 3,
+            "defense_dice": 4,
+            "mind": 3,
+            "move": 6,
+            "icon_file": "Chaos Warrior.png",
+            "dying_sound": "dying_enemy.mp3",
+            "color": [220, 40, 40]
+        },
+        {
+            "name": "Fimir Abomination",
+            "hp": 1,
+            "attack_dice": 3,
+            "defense_dice": 3,
+            "mind": 3,
+            "move": 6,
+            "icon_file": "Fimir Abomination.png",
+            "dying_sound": "dying_enemy.mp3",
+            "color": [220, 40, 40]
+        },
+        {
+            "name": "Gargoyle",
+            "hp": 1,
+            "attack_dice": 4,
+            "defense_dice": 4,
+            "mind": 4,
+            "move": 6,
+            "icon_file": "Gargoyle.png",
+            "dying_sound": "dying_enemy.mp3",
+            "color": [220, 40, 40]
+        },
+        {
+            "name": "Goblin Archer",
+            "hp": 1,
+            "attack_dice": 2,
+            "defense_dice": 1,
+            "mind": 0,
+            "move": 10,
+            "icon_file": "Goblin Archer.png",
+            "dying_sound": "dying_enemy.mp3",
+            "color": [220, 40, 40]
+        },
+        {
+            "name": "Goblin Spearman",
+            "hp": 1,
+            "attack_dice": 2,
+            "defense_dice": 1,
+            "mind": 0,
+            "move": 10,
+            "icon_file": "Goblin Spearman.png",
+            "dying_sound": "dying_enemy.mp3",
+            "color": [220, 40, 40]
+        },
+        {
+            "name": "Goblin",
+            "hp": 1,
+            "attack_dice": 2,
+            "defense_dice": 1,
+            "mind": 0,
+            "move": 10,
+            "icon_file": "Goblin.png",
+            "dying_sound": "dying_enemy.mp3",
+            "color": [220, 40, 40]
+        },
+        {
+            "name": "Mummy",
+            "hp": 1,
+            "attack_dice": 3,
+            "defense_dice": 4,
+            "mind": 0,
+            "move": 4,
+            "icon_file": "Mummy.png",
+            "dying_sound": "dying_enemy.mp3",
+            "color": [220, 40, 40]
+        },
+        {
+            "name": "Orc Archer",
+            "hp": 1,
+            "attack_dice": 3,
+            "defense_dice": 2,
+            "mind": 2,
+            "move": 8,
+            "icon_file": "Orc Archer.png",
+            "dying_sound": "dying_enemy.mp3",
+            "color": [220, 40, 40]
+        },
+        {
+            "name": "Orc Spearman",
+            "hp": 1,
+            "attack_dice": 3,
+            "defense_dice": 2,
+            "mind": 2,
+            "move": 8,
+            "icon_file": "Orc Spearman.png",
+            "dying_sound": "dying_enemy.mp3",
+            "color": [220, 40, 40]
+        },
+        {
+            "name": "Orc",
+            "hp": 1,
+            "attack_dice": 3,
+            "defense_dice": 2,
+            "mind": 2,
+            "move": 8,
+            "icon_file": "Orc.png",
+            "dying_sound": "dying_enemy.mp3",
+            "color": [220, 40, 40]
+        },
+        {
+            "name": "Skeleton Archer",
+            "hp": 1,
+            "attack_dice": 2,
+            "defense_dice": 2,
+            "mind": 0,
+            "move": 6,
+            "icon_file": "Skeleton Archer.png",
+            "dying_sound": "dying_enemy.mp3",
+            "color": [220, 40, 40]
+        },
+        {
+            "name": "Skeleton Spearman",
+            "hp": 1,
+            "attack_dice": 2,
+            "defense_dice": 2,
+            "mind": 0,
+            "move": 6,
+            "icon_file": "Skeleton Spearman.png",
+            "dying_sound": "dying_enemy.mp3",
+            "color": [220, 40, 40]
+        },
+        {
+            "name": "Skeleton",
+            "hp": 1,
+            "attack_dice": 2,
+            "defense_dice": 2,
+            "mind": 0,
+            "move": 6,
+            "icon_file": "Skeleton.png",
+            "dying_sound": "dying_enemy.mp3",
+            "color": [220, 40, 40]
+        },
+        {
+            "name": "Zombie",
+            "hp": 1,
+            "attack_dice": 2,
+            "defense_dice": 3,
+            "mind": 0,
+            "move": 4,
+            "icon_file": "Zombie.png",
+            "dying_sound": "dying_enemy.mp3",
+            "color": [220, 40, 40]
+        }
+    ]
+}

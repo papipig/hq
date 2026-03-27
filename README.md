@@ -58,3 +58,7 @@ This repository is an unofficial fan project and prototype. It is not owned by, 
 The HeroQuest name and related franchise elements are protected by copyright, trademark, and other intellectual property laws and belong to their respective rights holders. Current HeroQuest branding is associated with Hasbro and Avalon Hill, while the original 1989 board game was published by Milton Bradley in cooperation with Games Workshop.
 
 Original code in this repository is separate from the HeroQuest intellectual property and is distributed under the license in this project.
+
+## Thanks to
+
+Thanks to `https://forum.yeoldeinn.com`, and `https://github.com/hghero/HeroQuest` for inspiration (and also I took the liberty to take graphics from them).

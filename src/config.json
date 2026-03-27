@@ -1,0 +1,16 @@
+{
+    "release": {
+        "SPLASH_DURATION_MS": 30000,
+        "SPLASH_FADE_MS": 500,
+        "FULLSCREEN": true,
+        "MUSIC": true,
+        "SOUNDS": true
+    },
+    "debug": {
+        "SPLASH_DURATION_MS": 0,
+        "SPLASH_FADE_MS": 0,
+        "FULLSCREEN": true,
+        "MUSIC": false,
+        "SOUNDS": true
+    }
+}

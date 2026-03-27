@@ -1,0 +1,79 @@
+{
+    "objects": [
+        {
+            "id": "debris",
+            "size": [1, 1],
+            "image": "assets/graphics/sprites/debris.jpg",
+            "passthrough": false
+        },
+        {
+            "id": "armory",
+            "size": [3, 1],
+            "image": "assets/graphics/sprites/armory.tga",
+            "passthrough": false
+        },
+        {
+            "id": "alchemist_table",
+            "size": [3, 2],
+            "image": "assets/graphics/sprites/alchemist_table.jpg",
+            "passthrough": false
+        },
+        {
+            "id": "fireplace",
+            "size": [3, 1],
+            "image": "assets/graphics/sprites/fireplace.tga",
+            "passthrough": false
+        },
+        {
+            "id": "stairs",
+            "size": [2, 2],
+            "image": "assets/graphics/sprites/stairs.jpg",
+            "passthrough": true
+        },
+        {
+            "id": "table",
+            "size": [3, 2],
+            "image": "assets/graphics/sprites/table.tga",
+            "passthrough": false
+        },
+        {
+            "id": "throne",
+            "size": [1, 1],
+            "image": "assets/graphics/sprites/throne.tga",
+            "passthrough": false
+        },
+        {
+            "id": "torture_rack",
+            "size": [2, 3],
+            "image": "assets/graphics/sprites/torture_rack.tga",
+            "passthrough": false
+        },
+        {
+            "id": "chest",
+            "size": [1, 1],
+            "image": "assets/graphics/sprites/chest.tga",
+            "passthrough": false
+        },
+        {
+            "id": "cupboard",
+            "size": [1, 3],
+            "image": "assets/graphics/sprites/cupboard.jpg",
+            "passthrough": false
+        },
+        {
+            "id": "sarcophagus",
+            "size": [2, 3],
+            "image": "assets/graphics/sprites/sarcophagus.jpg",
+            "passthrough": false
+        },
+        {
+            "id": "warlock_table",
+            "size": [3, 2],
+            "image": "assets/graphics/sprites/warlock_table.jpg",
+            "passthrough": false
+        }
+    ],
+
+    "door_open": "assets/graphics/sprites/door_open.png",
+    "door_closed": "assets/graphics/sprites/door_closed.png"
+}
