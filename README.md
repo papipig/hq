@@ -4,6 +4,8 @@
 
 Unofficial Python and pygame project for a HeroQuest-style dungeon crawler.
 
+![HeroQuest box art](assets/graphics/misc/demo.png)
+
 ## Project Layout
 
 ```text

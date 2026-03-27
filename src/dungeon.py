@@ -1,9 +1,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import IntEnum, StrEnum
 import json
+from enum import IntEnum, Enum
 import pathlib
+
+# StrEnum was added in Python 3.11. Provide a minimal fallback for Python 3.10
+try:
+    # Prefer the real StrEnum when available
+    from enum import StrEnum  # type: ignore
+except ImportError:
+    class StrEnum(str, Enum):
+        """Minimal fallback for Python < 3.11.
+
+        Members are instances of str and Enum. This implements only what
+        this project needs from StrEnum (string value and str() behavior).
+        """
+
+        def __str__(self) -> str:  # pragma: no cover - trivial fallback
+            return str(self.value)
 
 
 class CellKind(StrEnum):

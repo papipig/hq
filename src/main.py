@@ -40,12 +40,12 @@ PANEL_TRANSITION_MS = 220
 INACTIVE_TEXT_COLOR = (150, 144, 136)
 
 ACTIONS = [
-    "Attack",
-    "Cast a spell",
-    "Search for treasure",
-    "Search for secret doors",
-    "Search for traps",
-    "Disarm a trap",
+    "ATTACK",
+    "CAST SPELL",
+    "SEARCH FOR TREASURE",
+    "SEARCH FOR SECRET DOORS",
+    "SEARCH FOR TRAPS",
+    "DISARM A TRAP"
 ]
 
 SRC_DIR = pathlib.Path(__file__).parent
@@ -63,6 +63,7 @@ ObjectInstanceKey: TypeAlias = tuple[str, int]
 MUSIC_END_EVENT = pygame.USEREVENT + 1
 
 COMBAT_DIE_FACES = ("skull", "skull", "skull", "human_shield", "human_shield", "monster_shield")
+DEATH_ANIM_MS = 2000
 
 
 def door_wall_rect(board: Board, col: int, row: int, direction: str) -> pygame.Rect:
@@ -361,16 +362,33 @@ def load_die_faces(size: int, font: pygame.font.Font) -> dict[int, pygame.Surfac
     for value, file_name in names.items():
         path = dice_dir / file_name
         if path.exists():
-            raw = pygame.image.load(str(path)).convert()
-            faces[value] = pygame.transform.smoothscale(raw, (size, size))
+            raw = pygame.image.load(str(path))
+            try:
+                raw = raw.convert_alpha()
+            except Exception:
+                raw = raw.convert()
+            # If the source has a flat corner background (jpg), remove it by
+            # blitting into an SRCALPHA surface with a colorkey, preserving
+            # per-pixel alpha so rotated dice don't get square corners.
+            try:
+                bg_color = raw.get_at((0, 0))
+                tmp = pygame.Surface(raw.get_size(), pygame.SRCALPHA)
+                raw.set_colorkey(bg_color)
+                tmp.blit(raw, (0, 0))
+                faces[value] = pygame.transform.smoothscale(tmp, (size, size)).convert_alpha()
+            except Exception:
+                faces[value] = pygame.transform.smoothscale(raw, (size, size)).convert()
             continue
 
-        fallback = pygame.Surface((size, size))
-        fallback.fill((236, 226, 205))
-        pygame.draw.rect(fallback, (80, 65, 48), fallback.get_rect(), 2, border_radius=6)
+        fallback = pygame.Surface((size, size), pygame.SRCALPHA)
+        # draw a filled rounded rectangle background
+        bg = pygame.Surface((size, size))
+        bg.fill((236, 226, 205))
+        pygame.draw.rect(bg, (80, 65, 48), bg.get_rect(), 2, border_radius=6)
+        fallback.blit(bg, (0, 0))
         label = font.render(str(value), True, (40, 32, 24))
         fallback.blit(label, label.get_rect(center=fallback.get_rect().center))
-        faces[value] = fallback
+        faces[value] = fallback.convert_alpha()
     return faces
 
 
@@ -391,12 +409,20 @@ def load_combat_face_sprites(size: int, font: pygame.font.Font) -> dict[str, pyg
     for face, file_name in names.items():
         path = dice_dir / file_name
         if path.exists():
-            raw = pygame.image.load(str(path)).convert()
-            # Remove flat JPG background around combat symbols.
+            # Load with alpha if possible, then remove any flat background color
+            # by blitting into an SRCALPHA surface. This keeps per-pixel alpha so
+            # rotated sprites don't create opaque square corners.
+            raw = pygame.image.load(str(path))
+            try:
+                raw = raw.convert_alpha()
+            except Exception:
+                raw = raw.convert()
             bg_color = raw.get_at((0, 0))
+            # Prepare an alpha surface and blit the image with colorkey applied
+            tmp = pygame.Surface(raw.get_size(), pygame.SRCALPHA)
             raw.set_colorkey(bg_color)
-            scaled = pygame.transform.smoothscale(raw, (size, size)).convert_alpha()
-            scaled.set_colorkey(bg_color)
+            tmp.blit(raw, (0, 0))
+            scaled = pygame.transform.smoothscale(tmp, (size, size)).convert_alpha()
             sprites[face] = scaled
             continue
 
@@ -483,7 +509,13 @@ def draw_left_menu(
             turn_rect = turn_badge.get_rect(topright=(row.right - 10, row.y + 8))
             screen.blit(turn_badge, turn_rect)
 
-        icon = circular_icon(player_icons[hero.name], 44, dimmed=not is_active)
+        raw_icon = player_icons.get(hero.name)
+        if raw_icon is None:
+            # Fallback: create a simple colored square as icon if mapping is missing
+            raw_icon = pygame.Surface((44, 44))
+            raw_icon.fill(hero.color)
+            player_icons[hero.name] = raw_icon
+        icon = circular_icon(raw_icon, 44, dimmed=not is_active)
         icon_rect = icon.get_rect(midleft=(row.x + 32, row.y + row_h // 2))
         screen.blit(icon, icon_rect)
         pygame.draw.circle(
@@ -680,6 +712,9 @@ def adjacent_enemy_indexes(player_cell: tuple[int, int], enemies: list[dict]) ->
     }
     indexes: list[int] = []
     for idx, enemy in enumerate(enemies):
+        # ignore enemies that are currently playing their death animation
+        if enemy.get("dying"):
+            continue
         cell = enemy.get("cell")
         if isinstance(cell, tuple) and len(cell) == 2 and cell in adjacent:
             indexes.append(idx)
@@ -733,23 +768,33 @@ def draw_attack_dialog(
     combat_face_sprites: dict[str, pygame.Surface],
     title_font: pygame.font.Font,
     text_font: pygame.font.Font,
+    board: "Board",
 ) -> None:
     sw, sh = screen.get_size()
+    # Small translucent veil over the board area only (leave menu visible)
     veil = pygame.Surface((sw, sh), pygame.SRCALPHA)
-    veil.fill((8, 6, 5, 170))
+    veil.fill((8, 6, 5, 120))
+    # Only dim the board area (use board.area_rect which covers board available area)
+    # but for simplicity dim whole screen lightly so UI remains readable.
     screen.blit(veil, (0, 0))
 
-    panel_w = int(sw * 0.9)
-    panel_h = int(sh * 0.74)
-    panel = pygame.Rect((sw - panel_w) // 2, (sh - panel_h) // 2, panel_w, panel_h)
+    # Make the combat panel taller (half the window height) and position it above the board area.
+    panel_w = int(board.rect.width * 0.92)
+    panel_h = int(sh * 0.5)
+    panel_x = board.rect.x + (board.rect.width - panel_w) // 2
+    panel_y = max(8, board.rect.y - panel_h - 8)
+    panel = pygame.Rect(panel_x, panel_y, panel_w, panel_h)
     pygame.draw.rect(screen, PANEL_BG, panel, border_radius=14)
     pygame.draw.rect(screen, ACCENT_COLOR, panel, 3, border_radius=14)
 
     header = title_font.render("Combat", True, ACCENT_COLOR)
     screen.blit(header, header.get_rect(midtop=(panel.centerx, panel.top + 16)))
 
-    left_col = pygame.Rect(panel.left + 28, panel.top + 72, panel_w // 2 - 44, panel_h - 190)
-    right_col = pygame.Rect(panel.centerx + 16, panel.top + 72, panel_w // 2 - 44, panel_h - 190)
+    # Two compact columns inside the panel
+    inner_top = panel.top + 52
+    inner_h = panel_h - 72
+    left_col = pygame.Rect(panel.left + 18, inner_top, panel_w // 2 - 36, inner_h)
+    right_col = pygame.Rect(panel.centerx + 18, inner_top, panel_w // 2 - 36, inner_h)
     for col_rect in (left_col, right_col):
         pygame.draw.rect(screen, PANEL_ROW, col_rect, border_radius=10)
 
@@ -781,12 +826,15 @@ def draw_attack_dialog(
         txt = text_font.render(line, True, TEXT_COLOR)
         screen.blit(txt, (right_col.left + 18, right_col.top + 144 + idx * 28))
 
+    # Dice sizing: make them large enough to read but fit inside the compact dialog
     base_dice_size = next(iter(combat_face_sprites.values())).get_width() if combat_face_sprites else 44
-    dice_size = max(24, base_dice_size * 3)
+    dice_size = max(28, min(64, base_dice_size * 2))
     phase = int(dialog.get("phase", 0))
-    row_step = dice_size + max(24, dice_size // 3)
-    atk_dice_y = panel.bottom - 150
-    def_dice_y = panel.bottom - 150
+    row_step = dice_size + max(8, dice_size // 4)
+
+    # Place dice centered vertically within each column
+    atk_center_y = left_col.centery
+    def_center_y = right_col.centery
 
     def _draw_dice_row(rolls: list[str], rotations: list[int], center_x: int, center_y: int) -> None:
         if not rolls:
@@ -796,17 +844,19 @@ def draw_attack_dialog(
             sprite = combat_face_sprites.get(face)
             if sprite is None:
                 continue
+            # Scale sprite to desired dice size (keep alpha)
             scaled = pygame.transform.smoothscale(sprite, (dice_size, dice_size))
             angle = rotations[idx] if idx < len(rotations) else 0
+            # Rotate an alpha-preserving surface; rotation will keep corners transparent
             rotated = pygame.transform.rotate(scaled, angle)
             rect = rotated.get_rect(center=(first_center_x + idx * row_step, center_y))
             screen.blit(rotated, rect)
 
     if phase >= 1:
-        _draw_dice_row(dialog["outcome"]["attack_rolls"], dialog["attacker_rotations"], left_col.centerx, atk_dice_y)
+        _draw_dice_row(dialog["outcome"]["attack_rolls"], dialog["attacker_rotations"], left_col.centerx, atk_center_y)
 
     if phase >= 2:
-        _draw_dice_row(dialog["outcome"]["defense_rolls"], dialog["defender_rotations"], right_col.centerx, def_dice_y)
+        _draw_dice_row(dialog["outcome"]["defense_rolls"], dialog["defender_rotations"], right_col.centerx, def_center_y)
 
     if phase == 0:
         result_line = "Click to throw attacker dice"
@@ -1367,6 +1417,7 @@ def draw_turn_controls(
     player: PlayerClass,
     turn_state: dict,
     dice_faces: dict[int, pygame.Surface],
+    movement_dice_height: int,
     can_attack: bool,
     hide_controls: bool,
     title_font: pygame.font.Font,
@@ -1384,6 +1435,7 @@ def draw_turn_controls(
         status_line = "Choose an action"
     elif turn_state["mode"] == "attack_target":
         status_line = "Select an adjacent enemy"
+        hide_controls = True
     elif turn_state["selected_action"]:
         status_line = f"Action used: {turn_state['selected_action']}"
 
@@ -1392,51 +1444,43 @@ def draw_turn_controls(
         status_line = f"{status_line} ({', '.join(flags)})"
 
     status_y = start_y + 40
-    movement_dice_height = 0
-    if show_dice_roll:
-        die_one = pygame.transform.smoothscale(
-            dice_faces[turn_state["dice_roll"][0]],
-            (
-                dice_faces[turn_state["dice_roll"][0]].get_width() * 2,
-                dice_faces[turn_state["dice_roll"][0]].get_height() * 2,
-            ),
-        )
-        die_two = pygame.transform.smoothscale(
-            dice_faces[turn_state["dice_roll"][1]],
-            (
-                dice_faces[turn_state["dice_roll"][1]].get_width() * 2,
-                dice_faces[turn_state["dice_roll"][1]].get_height() * 2,
-            ),
-        )
-        die_one_rect = die_one.get_rect(topleft=(panel_rect.x + 16, status_y))
-        die_two_rect = die_two.get_rect(topleft=(die_one_rect.right + 10, status_y))
-        screen.blit(die_one, die_one_rect)
-        screen.blit(die_two, die_two_rect)
-        movement_dice_height = max(die_one_rect.height, die_two_rect.height)
-
-        #total_label = text_font.render(f"= {turn_state['move_points']}", True, TEXT_COLOR)
-        #total_rect = total_label.get_rect(midleft=(die_two_rect.right + 14, die_two_rect.centery))
-        #screen.blit(total_label, total_rect)
-    else:
+    # movement_dice_height is drawn by the caller (under the menu). Use the
+    # provided height to offset the control buttons so spacing remains correct.
+    if not show_dice_roll:
         status_surface = text_font.render(status_line, True, TEXT_COLOR)
         screen.blit(status_surface, (panel_rect.x + 16, status_y))
 
-    button_y = start_y + 92 + (movement_dice_height + 10 if show_dice_roll else 0)
+    button_y = start_y + 92 + (movement_dice_height + 10 if movement_dice_height else 0)
     button_w = panel_rect.width - 32
     move_rect = pygame.Rect(panel_rect.x + 16, button_y, button_w, 42)
     action_rect = pygame.Rect(panel_rect.x + 16, button_y + 52, button_w, 42)
     controls_open = turn_state["mode"] == "action"
-    pass_y = button_y + 104 if not controls_open else button_y
-    pass_rect = pygame.Rect(panel_rect.x + 16, pass_y, button_w, 42)
+
     rects["move"] = move_rect
     rects["action"] = action_rect
-    rects["pass_turn"] = pass_rect
 
+    # Draw MOVE and ACTION when controls are closed. When controls are
+    # open we'll render the action list and then place PASS TURN at the end.
     if not controls_open and not hide_controls:
         move_enabled = not turn_state["moved"] and not turn_state["move_locked"]
         draw_button(screen, move_rect, "MOVE", mouse_pos, text_font, enabled=move_enabled)
         draw_button(screen, action_rect, "ACTION", mouse_pos, text_font, enabled=not turn_state["acted"])
-    if not hide_controls:
+
+    action_block_bottom = button_y
+    if controls_open and not hide_controls:
+        # Start the actions a bit below the main buttons area.
+        action_y = button_y + 60
+        for index, action_name in enumerate(ACTIONS):
+            rect = pygame.Rect(panel_rect.x + 16, action_y + index * 42, button_w, 34)
+            rects[f"action_{index}"] = rect
+            # ACTIONS list contains uppercase names; compare case-insensitively
+            enabled = can_attack if action_name.upper() == "ATTACK" else True
+            draw_button(screen, rect, action_name, mouse_pos, text_font, enabled=enabled)
+
+        # PASS TURN sits after the actions list when open
+        pass_y = action_y + len(ACTIONS) * 42 + 12
+        pass_rect = pygame.Rect(panel_rect.x + 16, pass_y, button_w, 42)
+        rects["pass_turn"] = pass_rect
         draw_button(
             screen,
             pass_rect,
@@ -1448,16 +1492,24 @@ def draw_turn_controls(
             hover_bg_color=PASS_BUTTON_HOVER,
             border_color=PASS_BUTTON_BORDER,
         )
-
-    action_block_bottom = pass_rect.bottom
-    if controls_open and not hide_controls:
-        action_y = pass_rect.bottom + 18
-        for index, action_name in enumerate(ACTIONS):
-            rect = pygame.Rect(panel_rect.x + 16, action_y + index * 42, button_w, 34)
-            rects[f"action_{index}"] = rect
-            enabled = can_attack if action_name == "Attack" else True
-            draw_button(screen, rect, action_name, mouse_pos, text_font, enabled=enabled)
-        action_block_bottom = action_y + (len(ACTIONS) - 1) * 42 + 34
+        action_block_bottom = pass_rect.bottom
+    else:
+        # PASS TURN position when controls are closed (unchanged behaviour)
+        pass_y = button_y + 104
+        pass_rect = pygame.Rect(panel_rect.x + 16, pass_y, button_w, 42)
+        rects["pass_turn"] = pass_rect
+        if not hide_controls:
+            draw_button(
+                screen,
+                pass_rect,
+                "PASS TURN",
+                mouse_pos,
+                text_font,
+                enabled=True,
+                bg_color=PASS_BUTTON_BG,
+                hover_bg_color=PASS_BUTTON_HOVER,
+                border_color=PASS_BUTTON_BORDER,
+            )
 
     controls_area = pygame.Rect(
         panel_rect.x + 8,
@@ -1479,7 +1531,23 @@ def draw_players_on_board(
         col, row = player.cell
         cell_rect = board.cell_rect(col, row)
         token_size = max(18, min(cell_rect.width, cell_rect.height) - 10)
-        icon = circular_icon(token_icons[player.name], token_size, dimmed=not is_active)
+        raw_icon = token_icons.get(player.name)
+        if raw_icon is None:
+            # Fallback: create a simple colored square as icon if mapping is missing
+            raw_icon = pygame.Surface((token_size, token_size))
+            raw_icon.fill(player.color)
+            token_icons[player.name] = raw_icon
+        icon = circular_icon(raw_icon, token_size, dimmed=not is_active)
+
+        # Handle player death fade-out if scheduled
+        dying = getattr(player, "dying", False)
+        if dying:
+            now = pygame.time.get_ticks()
+            start = int(getattr(player, "death_start", now))
+            frac = min(1.0, max(0.0, (now - start) / DEATH_ANIM_MS))
+            alpha = int(255 * (1.0 - frac))
+            icon = icon.copy()
+            icon.set_alpha(alpha)
 
         frame_rect = pygame.Rect(0, 0, token_size + 8, token_size + 8)
         frame_rect.center = cell_rect.center
@@ -1519,8 +1587,12 @@ def draw_enemies_on_board(
     attackable_enemy_indexes: set[int] | None = None,
 ) -> None:
     attackable_enemy_indexes = attackable_enemy_indexes or set()
+    now = pygame.time.get_ticks()
     for enemy_index, (enemy, icon_surface) in enumerate(zip(enemies, enemy_icons, strict=False)):
-        if not reveal_all and enemy_index not in visible_enemies:
+        if enemy.get("dying"):
+            # allow showing dying enemy regardless of reveal_all so animation is visible
+            pass
+        elif not reveal_all and enemy_index not in visible_enemies:
             continue
         cell = enemy.get("cell")
         if not isinstance(cell, tuple) or len(cell) != 2:
@@ -1535,14 +1607,33 @@ def draw_enemies_on_board(
 
         frame_rect = pygame.Rect(0, 0, token_size + 8, token_size + 8)
         frame_rect.center = cell_rect.center
-        color = tuple(enemy.get("color", [220, 40, 40]))
-        pygame.draw.ellipse(screen, color, frame_rect)
-        border_color = ACCENT_COLOR if enemy_index in attackable_enemy_indexes else (35, 20, 20)
-        border_width = 3 if enemy_index in attackable_enemy_indexes else 2
-        pygame.draw.ellipse(screen, border_color, frame_rect, border_width)
 
-        icon_rect = icon.get_rect(center=cell_rect.center)
-        screen.blit(icon, icon_rect)
+        # If the enemy is dying, compute fade-out alpha based on elapsed time.
+        if enemy.get("dying"):
+            start = int(enemy.get("death_start", now))
+            elapsed = max(0, now - start)
+            frac = min(1.0, elapsed / DEATH_ANIM_MS)
+            alpha = int(255 * (1.0 - frac))
+            color = tuple(enemy.get("color", [220, 40, 40])) + (alpha,)
+            # draw fading ellipse on an SRCALPHA surface
+            surf = pygame.Surface(frame_rect.size, pygame.SRCALPHA)
+            pygame.draw.ellipse(surf, color, surf.get_rect())
+            screen.blit(surf, frame_rect.topleft)
+            # Draw icon with alpha
+            icon = circular_icon(icon_surface, token_size)
+            icon = icon.copy()
+            icon.set_alpha(alpha)
+            icon_rect = icon.get_rect(center=cell_rect.center)
+            screen.blit(icon, icon_rect)
+        else:
+            color = tuple(enemy.get("color", [220, 40, 40]))
+            pygame.draw.ellipse(screen, color, frame_rect)
+            border_color = ACCENT_COLOR if enemy_index in attackable_enemy_indexes else (35, 20, 20)
+            border_width = 3 if enemy_index in attackable_enemy_indexes else 2
+            pygame.draw.ellipse(screen, border_color, frame_rect, border_width)
+
+            icon_rect = icon.get_rect(center=cell_rect.center)
+            screen.blit(icon, icon_rect)
 
 
 def build_enemy_menu_rows(
@@ -1553,6 +1644,9 @@ def build_enemy_menu_rows(
 ) -> list[dict]:
     grouped: dict[str, dict] = {}
     for enemy_index, enemy in enumerate(enemies):
+        # Skip enemies that are in death animation
+        if enemy.get("dying"):
+            continue
         if not reveal_all and enemy_index not in visible_enemies:
             continue
 
@@ -1991,32 +2085,35 @@ def main() -> int:
                         if phase == 0:
                             play_sfx("dice_roll")
                             dialog["attacker_rotations"] = roll_dice_rotations(len(outcome["attack_rolls"]))
-                            for _ in range(int(outcome["skulls"])):
-                                play_named_sound("sword.mp3")
+                            # Queue individual dice SFX (sword) to play with 1s spacing
+                            sfx_list: list[str] = ["sword.mp3" for _ in range(int(outcome["skulls"]))]
+                            dialog["sfx_queue"] = sfx_list
+                            # Start after 1 second
+                            dialog["sfx_next_time"] = pygame.time.get_ticks() + 1000
                             dialog["phase"] = 1
                         elif phase == 1:
                             play_sfx("dice_roll")
                             dialog["defender_rotations"] = roll_dice_rotations(len(outcome["defense_rolls"]))
-                            for _ in range(int(outcome["saves"])):
-                                play_named_sound("shield.mp3")
-                            for _ in range(int(outcome["damage"])):
-                                play_named_sound("damage.mp3")
+                            # Queue defender sfx (shield then damage) with 1s spacing
+                            sfx_list = ["shield.mp3" for _ in range(int(outcome["saves"]))]
+                            sfx_list += ["damage.mp3" for _ in range(int(outcome["damage"]))]
+                            dialog["sfx_queue"] = sfx_list
+                            dialog["sfx_next_time"] = pygame.time.get_ticks() + 1000
                             dialog["phase"] = 2
                         else:
                             target_index = int(dialog["target_index"])
                             if 0 <= target_index < len(enemies):
                                 enemies[target_index]["hp"] = int(outcome["defender_hp_after"])
                                 if outcome["defender_dead"]:
+                                    # Start death animation instead of immediate removal.
                                     dying_sound = str(enemies[target_index].get("dying_sound", ""))
                                     if dying_sound:
                                         play_named_sound(dying_sound)
-                                    del enemies[target_index]
-                                    del enemy_icons[target_index]
-                                    visible_enemies = {
-                                        (idx - 1 if idx > target_index else idx)
-                                        for idx in visible_enemies
-                                        if idx != target_index
-                                    }
+                                    now = pygame.time.get_ticks()
+                                    enemies[target_index]["dying"] = True
+                                    enemies[target_index]["death_start"] = now
+                                    # Remove from visible/enemy targeting sets immediately
+                                    visible_enemies = {i for i in visible_enemies if i != target_index}
                             turn_state["acted"] = True
                             turn_state["selected_action"] = "Attack"
                             turn_state["mode"] = None
@@ -2149,6 +2246,8 @@ def main() -> int:
                         die_one = random.randint(1, 6)
                         die_two = random.randint(1, 6)
                         play_sfx("dice_roll")
+                        # store random rotations for the two movement dice
+                        turn_state["dice_rotations"] = roll_dice_rotations(2)
                         move_points = die_one + die_two
                         turn_state["dice_roll"] = (die_one, die_two)
                         turn_state["move_points"] = move_points
@@ -2170,7 +2269,15 @@ def main() -> int:
                             turn_state["mode"] = None
                         start_panel_transition(panel_transition, controls_area_rect)
 
-                    if control_rects.get("action") and control_rects["action"].collidepoint(mouse_pos) and not turn_state["acted"]:
+                    # Only open the action menu when it's not already open. This
+                    # prevents clicks on the action-list items from also toggling
+                    # the main ACTION button (which produced a stray click sound).
+                    if (
+                        control_rects.get("action")
+                        and control_rects["action"].collidepoint(mouse_pos)
+                        and not turn_state["acted"]
+                        and turn_state["mode"] != "action"
+                    ):
                         play_sfx("click")
                         turn_state["mode"] = "action"
                         turn_state["reachable_cells"] = set()
@@ -2186,30 +2293,60 @@ def main() -> int:
                         start_panel_transition(panel_transition, controls_area_rect)
 
                     if turn_state["mode"] == "action":
+                        handled_click = False
                         for index, action_name in enumerate(ACTIONS):
                             rect = control_rects.get(f"action_{index}")
                             if rect and rect.collidepoint(mouse_pos):
-                                if action_name == "Attack":
+                                # Determine whether this action is enabled. Attack is
+                                # only enabled when there are adjacent enemies.
+                                enabled = True
+                                if action_name.upper() == "ATTACK":
                                     attack_candidates = adjacent_enemy_indexes(active_player.cell, enemies)
-                                    if not attack_candidates:
-                                        break
+                                    enabled = bool(attack_candidates)
+                                if not enabled:
+                                    # Consume the click but do nothing (no sound)
+                                    handled_click = True
+                                    break
+
+                                handled_click = True
+                                if action_name.upper() == "ATTACK":
                                     play_sfx("click")
                                     turn_state["mode"] = "attack_target"
                                     turn_state["attack_candidates"] = attack_candidates
                                     start_panel_transition(panel_transition, controls_area_rect)
                                     break
+
                                 play_sfx("click")
                                 turn_state["acted"] = True
                                 turn_state["selected_action"] = action_name
                                 turn_state["mode"] = None
                                 start_panel_transition(panel_transition, controls_area_rect)
                                 break
+                        if handled_click:
+                            # Skip other click processing when an action button was clicked
+                            continue
 
                     if turn_state["moved"] and turn_state["acted"]:
                         active_player_index = (active_player_index + 1) % len(players)
                         turn_state = new_turn_state()
                         active_player = players[active_player_index]
                         start_panel_transition(panel_transition, controls_area_rect)
+
+        # Process queued combat SFX (play one per second) when an attack dialog is active.
+        if turn_state.get("attack_dialog") is not None:
+            dialog = turn_state["attack_dialog"]
+            sfx_queue = dialog.get("sfx_queue")
+            next_time = dialog.get("sfx_next_time")
+            if sfx_queue and next_time is not None:
+                now = pygame.time.get_ticks()
+                if now >= next_time and len(sfx_queue) > 0:
+                    sound_file = sfx_queue.pop(0)
+                    play_named_sound(sound_file)
+                    # schedule next sound in 1000 ms if any remain
+                    dialog["sfx_next_time"] = now + 1000 if sfx_queue else None
+                if not sfx_queue:
+                    dialog.pop("sfx_queue", None)
+                    dialog.pop("sfx_next_time", None)
 
         screen.fill(BACKGROUND_COLOR)
 
@@ -2242,8 +2379,7 @@ def main() -> int:
             hovered_cell = board.px_to_cell(*mouse_pos)
             if hovered_cell is not None:
                 col, row = hovered_cell
-                if dungeon_map.cell_kind(col, row) != CellKind.BLOCKED:
-                    board.draw_hover_cell(mouse_pos)
+                board.draw_hover_cell(mouse_pos)
         else:
             draw_hovered_door_highlight(screen, board, hovered_door, door_states, door_sprites)
         visible_enemy_rows = build_enemy_menu_rows(
@@ -2263,14 +2399,88 @@ def main() -> int:
             title_font,
             text_font,
         )
+
+        # Remove enemies whose death animation finished. Do this before
+        # drawing UI controls so rect indices remain stable within a frame.
+        now = pygame.time.get_ticks()
+        expired: list[int] = []
+        for idx, enemy in enumerate(enemies):
+            if enemy.get("dying"):
+                start = int(enemy.get("death_start", 0))
+                if now - start >= DEATH_ANIM_MS:
+                    expired.append(idx)
+        if expired:
+            for idx in reversed(expired):
+                # remove enemy and its icon
+                del enemies[idx]
+                del enemy_icons[idx]
+                visible_enemies = { (i - 1 if i > idx else i) for i in visible_enemies if i != idx }
+        # Also purge dead players (if any are scheduled)
+        expired_players: list[int] = []
+        for pidx, player in enumerate(players):
+            if getattr(player, "dying", False):
+                start = int(getattr(player, "death_start", 0))
+                if now - start >= DEATH_ANIM_MS:
+                    expired_players.append(pidx)
+        if expired_players:
+            for pidx in reversed(expired_players):
+                pname = players[pidx].name
+                del players[pidx]
+                # remove associated icons
+                menu_icons.pop(pname, None)
+                board_icons.pop(pname, None)
+                # adjust active player index if necessary
+                if active_player_index >= len(players):
+                    active_player_index = max(0, len(players) - 1)
+
+        # Draw movement dice at the BOTTOM of the left menu panel so they
+        # appear anchored to the menu. Controls (buttons) keep their
+        # normal placement (we don't alter their spacing here).
+        controls_start_y = controls_y + 12
+        movement_dice_height = 0
+        show_dice_roll = turn_state["mode"] == "move"
+        if show_dice_roll and turn_state.get("dice_roll"):
+            die_one = pygame.transform.smoothscale(
+                dice_faces[turn_state["dice_roll"][0]],
+                (
+                    dice_faces[turn_state["dice_roll"][0]].get_width() * 2,
+                    dice_faces[turn_state["dice_roll"][0]].get_height() * 2,
+                ),
+            )
+            die_two = pygame.transform.smoothscale(
+                dice_faces[turn_state["dice_roll"][1]],
+                (
+                    dice_faces[turn_state["dice_roll"][1]].get_width() * 2,
+                    dice_faces[turn_state["dice_roll"][1]].get_height() * 2,
+                ),
+            )
+            # Random rotations (if present) and center dice horizontally
+            rotations = turn_state.get("dice_rotations", [0, 0])
+            r1 = rotations[0] if len(rotations) > 0 else 0
+            r2 = rotations[1] if len(rotations) > 1 else 0
+            rot_one = pygame.transform.rotate(die_one, r1)
+            rot_two = pygame.transform.rotate(die_two, r2)
+            gap = 10
+            total_w = rot_one.get_width() + gap + rot_two.get_width()
+            start_x = panel_rect.x + (panel_rect.width - total_w) // 2
+            margin = 12
+            die_y = panel_rect.bottom - margin - max(rot_one.get_height(), rot_two.get_height())
+            die_one_rect = rot_one.get_rect(topleft=(start_x, die_y))
+            die_two_rect = rot_two.get_rect(topleft=(die_one_rect.right + gap, die_y))
+            screen.blit(rot_one, die_one_rect)
+            screen.blit(rot_two, die_two_rect)
+            # Controls spacing shouldn't change since dice are anchored to
+            # the bottom of the menu, so leave movement_dice_height as 0.
+
         control_rects, controls_area_rect = draw_turn_controls(
             screen,
             panel_rect,
-            controls_y + 12,
+            controls_start_y,
             mouse_pos,
             players[active_player_index],
             turn_state,
             dice_faces,
+            0,
             bool(adjacent_enemy_indexes(active_player.cell, enemies)),
             turn_state["attack_dialog"] is not None,
             title_font,
@@ -2289,6 +2499,7 @@ def main() -> int:
                     combat_face_sprites,
                     title_font,
                     text_font,
+                    board,
                 )
         if tooltip:
             draw_tooltip(screen, mouse_pos, tooltip, text_font)
