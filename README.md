@@ -61,7 +61,7 @@ hq-game
 You can also start it with:
 
 ```bash
-python -m main
+python src/main.py
 ```
 
 ## Disclaimer
