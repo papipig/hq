@@ -218,8 +218,17 @@ def validate_doors(quest_payload: dict, quest_path: pathlib.Path) -> None:
         )
 
 
-def extract_door_states(quest_payload: dict) -> dict[DoorKey, bool]:
+def extract_door_states(
+    quest_payload: dict,
+) -> tuple[dict[DoorKey, bool], set[DoorKey]]:
+    """Return (door_states, secret_door_keys).
+
+    secret_door_keys contains the DoorKeys of doors that start hidden.
+    They are included in door_states (closed) but not in visible_doors
+    until a hero searches the room they border.
+    """
     door_states: dict[DoorKey, bool] = {}
+    secret_door_keys: set[DoorKey] = set()
     for door in quest_payload.get("doors", []):
         if not isinstance(door, dict):
             continue
@@ -232,16 +241,21 @@ def extract_door_states(quest_payload: dict) -> dict[DoorKey, bool]:
             continue
 
         mask = int(door.get("rotation", 0))
+        is_hidden = bool(door.get("hidden", False))
         for bit, direction in DOOR_MASK_TO_DIR.items():
             if mask & bit:
-                door_states[(col, row, direction)] = False
-    return door_states
+                key: DoorKey = (col, row, direction)
+                door_states[key] = False
+                if is_hidden:
+                    secret_door_keys.add(key)
+    return door_states, secret_door_keys
 
 
-def load_door_image_paths() -> tuple[pathlib.Path | None, pathlib.Path | None]:
+def load_door_image_paths() -> tuple[pathlib.Path | None, pathlib.Path | None, pathlib.Path | None]:
+    """Return (open_path, closed_path, secret_path) for door sprites."""
     objects_file = SRC_DIR.parent / "data" / "objects.json"
     if not objects_file.exists():
-        return None, None
+        return None, None, None
 
     with objects_file.open() as file:
         payload = json.load(file)
@@ -263,9 +277,11 @@ def load_door_image_paths() -> tuple[pathlib.Path | None, pathlib.Path | None]:
 
     open_path = payload.get("door_open")
     closed_path = payload.get("door_closed")
+    secret_path = payload.get("door_secret")
     resolved_open = resolve_image_path(open_path)
     resolved_closed = resolve_image_path(closed_path)
-    return resolved_open, resolved_closed
+    resolved_secret = resolve_image_path(secret_path)
+    return resolved_open, resolved_closed, resolved_secret
 
 
 def apply_quest_object_placements(
@@ -471,6 +487,7 @@ def draw_left_menu(
     enemy_menu_rows: list[dict],
     title_font: pygame.font.Font,
     text_font: pygame.font.Font,
+    zargon_acting_enemy_name: str | None = None,
 ) -> tuple[list[str] | None, int]:
     tooltip_lines: list[str] | None = None
 
@@ -483,8 +500,10 @@ def draw_left_menu(
     y = panel_rect.y + 64
     row_h = 72
     heart_size = 14
+    # During Zargon's turn suppress the hero "TURN" badge entirely.
+    zargon_turn = zargon_acting_enemy_name is not None
     for hero in players:
-        is_active = hero.name == active_player_name
+        is_active = (not zargon_turn) and hero.name == active_player_name
         row = pygame.Rect(panel_rect.x + 12, y, panel_rect.width - 24, row_h)
         hovered = row.collidepoint(mouse_pos)
         row_color = PANEL_ROW_HOVER if hovered and is_active else PANEL_ROW_HOVER if hovered else PANEL_ROW
@@ -543,16 +562,35 @@ def draw_left_menu(
     y += 44
 
     for enemy in enemy_menu_rows:
+        enemy_name = str(enemy["name"])
+        is_acting = zargon_turn and enemy_name == zargon_acting_enemy_name
         row = pygame.Rect(panel_rect.x + 12, y, panel_rect.width - 24, 64)
         hovered = row.collidepoint(mouse_pos)
-        pygame.draw.rect(screen, PANEL_ROW_HOVER if hovered else PANEL_ROW, row, border_radius=6)
+        # Acting enemy gets a distinct highlight (reddish), like the hero TURN row.
+        if is_acting:
+            row_bg = (60, 22, 22)
+        elif hovered:
+            row_bg = PANEL_ROW_HOVER
+        else:
+            row_bg = PANEL_ROW
+        pygame.draw.rect(screen, row_bg, row, border_radius=6)
+
+        # Left accent bar + "TURN" badge for the acting enemy
+        if is_acting:
+            marker = pygame.Rect(row.x + 8, row.y + 6, 10, row.height - 12)
+            pygame.draw.rect(screen, (210, 60, 60), marker, border_radius=5)
+            turn_badge = text_font.render("ACT", True, (210, 60, 60))
+            turn_rect = turn_badge.get_rect(topright=(row.right - 10, row.y + 8))
+            screen.blit(turn_badge, turn_rect)
 
         icon = circular_icon(enemy["icon"], 40)
         icon_rect = icon.get_rect(midleft=(row.x + 28, row.y + row.height // 2))
         screen.blit(icon, icon_rect)
-        pygame.draw.circle(screen, (110, 106, 100), icon_rect.center, icon_rect.width // 2 + 2, 2)
+        circle_color = (210, 60, 60) if is_acting else (110, 106, 100)
+        circle_width = 3 if is_acting else 2
+        pygame.draw.circle(screen, circle_color, icon_rect.center, icon_rect.width // 2 + 2, circle_width)
 
-        label = text_font.render(str(enemy["name"]), True, TEXT_COLOR)
+        label = text_font.render(enemy_name, True, TEXT_COLOR)
         screen.blit(label, (icon_rect.right + 12, row.y + 7))
 
         hp = int(enemy.get("hp", enemy.get("max_hp", 1)))
@@ -565,8 +603,8 @@ def draw_left_menu(
 
         if hovered:
             tooltip_lines = [
-                str(enemy["name"]),
-                f"Visible: {enemy.get('visible_count', 1)}",
+                enemy_name,
+                f"Move: {enemy.get('move', 0)}",
                 f"Attack dice: {enemy.get('attack_dice', 0)}",
                 f"Defense dice: {enemy.get('defense_dice', 0)}",
                 f"Mind: {enemy.get('mind', 0)}",
@@ -692,21 +730,45 @@ def compute_reachable_cells(
     return reachable_costs, previous_step
 
 
-def adjacent_enemy_indexes(player_cell: tuple[int, int], enemies: list[dict]) -> list[int]:
-    col, row = player_cell
-    adjacent = {
-        (col - 1, row),
-        (col + 1, row),
-        (col, row - 1),
-        (col, row + 1),
-    }
+def cells_are_attack_adjacent(
+    cell_a: tuple[int, int],
+    cell_b: tuple[int, int],
+    door_states: dict,
+) -> bool:
+    """Return True when cell_a and cell_b are orthogonally adjacent with no
+    wall (or only an open door) between them – i.e. a melee attack is
+    possible between the two cells."""
+    ca_col, ca_row = cell_a
+    cb_col, cb_row = cell_b
+    dc = cb_col - ca_col
+    dr = cb_row - ca_row
+    # Must be exactly one step in one cardinal direction.
+    if abs(dc) + abs(dr) != 1:
+        return False
+    direction = None
+    if dc == 1:
+        direction = "E"
+    elif dc == -1:
+        direction = "W"
+    elif dr == 1:
+        direction = "S"
+    elif dr == -1:
+        direction = "N"
+    if direction is None:
+        return False
+    return is_passable_with_doors(ca_col, ca_row, direction, door_states)
+
+
+def adjacent_enemy_indexes(player_cell: tuple[int, int], enemies: list[dict], door_states: dict) -> list[int]:
     indexes: list[int] = []
     for idx, enemy in enumerate(enemies):
         # ignore enemies that are currently playing their death animation
         if enemy.get("dying"):
             continue
         cell = enemy.get("cell")
-        if isinstance(cell, tuple) and len(cell) == 2 and cell in adjacent:
+        if not isinstance(cell, tuple) or len(cell) != 2:
+            continue
+        if cells_are_attack_adjacent(player_cell, cell, door_states):
             indexes.append(idx)
     return indexes
 
@@ -748,10 +810,37 @@ def compute_attack_outcome(hero: PlayerClass, enemy: dict) -> dict:
     }
 
 
+def compute_attack_outcome_enemy(enemy: dict, hero: PlayerClass) -> dict:
+    """Compute the outcome when an enemy attacks a hero.
+
+    Enemies roll attack dice (skulls) and heroes defend with human shields.
+    Returns the same shape as compute_attack_outcome so the dialog renderer
+    can display it without changes.
+    """
+    attack_rolls = roll_combat_dice(int(enemy.get("attack_dice", 0)))
+    defense_rolls = roll_combat_dice(int(hero.defense_dice))
+    skulls = sum(1 for face in attack_rolls if face == "skull")
+    # Heroes defend with *human* shields (helmet or shield face).
+    saves = sum(1 for face in defense_rolls if face in ("human_shield",))
+    damage = max(0, skulls - saves)
+
+    hero_hp = int(hero.hp)
+    remaining_hp = max(0, hero_hp - damage)
+    return {
+        "attack_rolls": attack_rolls,
+        "defense_rolls": defense_rolls,
+        "skulls": skulls,
+        "saves": saves,
+        "damage": damage,
+        "defender_hp_before": hero_hp,
+        "defender_hp_after": remaining_hp,
+        "defender_dead": remaining_hp <= 0,
+    }
+
 def draw_attack_dialog(
     screen: pygame.Surface,
     dialog: dict,
-    attacker: PlayerClass,
+    attacker: "PlayerClass | dict",
     defender: dict,
     attacker_icon: pygame.Surface,
     defender_icon: pygame.Surface,
@@ -759,6 +848,7 @@ def draw_attack_dialog(
     title_font: pygame.font.Font,
     text_font: pygame.font.Font,
     board: "Board",
+    auto_advance: bool = False,
 ) -> None:
     sw, sh = screen.get_size()
     # Small translucent veil over the board area only (leave menu visible)
@@ -793,15 +883,29 @@ def draw_attack_dialog(
     screen.blit(atk_icon, atk_icon.get_rect(midtop=(left_col.centerx, left_col.top + 12)))
     screen.blit(def_icon, def_icon.get_rect(midtop=(right_col.centerx, right_col.top + 12)))
 
-    atk_name = text_font.render(attacker.name, True, TEXT_COLOR)
+    # Support both PlayerClass (hero) and dict (enemy) as attacker.
+    if isinstance(attacker, dict):
+        atk_display_name = str(attacker.get("display_name", attacker.get("name", "Enemy")))
+    else:
+        atk_display_name = attacker.name
+    atk_name = text_font.render(atk_display_name, True, TEXT_COLOR)
     def_name = text_font.render(str(defender.get("display_name", defender.get("name", "Enemy"))), True, TEXT_COLOR)
     screen.blit(atk_name, atk_name.get_rect(midtop=(left_col.centerx, left_col.top + 106)))
     screen.blit(def_name, def_name.get_rect(midtop=(right_col.centerx, right_col.top + 106)))
 
+    # Support both PlayerClass (hero) and dict (enemy) as attacker.
+    if isinstance(attacker, dict):
+        atk_attack_dice = int(attacker.get("attack_dice", 0))
+        atk_defense_dice = int(attacker.get("defense_dice", 0))
+        atk_hp_str = f"{int(attacker.get('hp', 1))}/{int(attacker.get('max_hp', attacker.get('hp', 1)))}"
+    else:
+        atk_attack_dice = attacker.attack_dice
+        atk_defense_dice = attacker.defense_dice
+        atk_hp_str = f"{attacker.hp}/{attacker.max_hp}"
     atk_stats = [
-        f"Attack dice: {attacker.attack_dice}",
-        f"Defense dice: {attacker.defense_dice}",
-        f"Body: {attacker.hp}/{attacker.max_hp}",
+        f"Attack dice: {atk_attack_dice}",
+        f"Defense dice: {atk_defense_dice}",
+        f"Body: {atk_hp_str}",
     ]
     def_stats = [
         f"Attack dice: {int(defender.get('attack_dice', 0))}",
@@ -849,9 +953,13 @@ def draw_attack_dialog(
         _draw_dice_row(dialog["outcome"]["defense_rolls"], dialog["defender_rotations"], right_col.centerx, def_center_y)
 
     if phase == 0:
-        result_line = "Click to throw attacker dice"
+        result_line = "Auto-rolling…" if auto_advance else "Click to roll attack dice"
     elif phase == 1:
-        result_line = f"Attacker rolled {dialog['outcome']['skulls']} skull(s). Click for defense roll"
+        skulls = dialog['outcome']['skulls']
+        if auto_advance:
+            result_line = f"Enemy rolled {skulls} skull(s) — click to defend!"
+        else:
+            result_line = f"Attacker rolled {skulls} skull(s) — rolling defence…"
     else:
         result_line = (
             f"Skulls {dialog['outcome']['skulls']}  vs  Saves {dialog['outcome']['saves']}"
@@ -860,7 +968,14 @@ def draw_attack_dialog(
     result_txt = text_font.render(result_line, True, ACCENT_COLOR)
     screen.blit(result_txt, result_txt.get_rect(midbottom=(panel.centerx, panel.bottom - 44)))
 
-    click_label = "Click to continue" if phase < 2 else "Click to resolve"
+    if auto_advance and phase < 1:
+        click_label = "Auto-rolling…"
+    elif phase == 0:
+        click_label = "Click to attack"
+    elif phase == 1:
+        click_label = "…"
+    else:
+        click_label = "Click to resolve" if not auto_advance else "Click to resolve"
     click_txt = text_font.render(click_label, True, TEXT_COLOR)
     screen.blit(click_txt, click_txt.get_rect(midbottom=(panel.centerx, panel.bottom - 14)))
 
@@ -1102,6 +1217,7 @@ def update_visibility_from_player(
     visible_objects: set[ObjectInstanceKey],
     visible_doors: set[DoorKey],
     visible_enemies: set[int],
+    secret_door_keys: set[DoorKey] | None = None,
 ) -> None:
     opaque_cells = collect_opaque_cells(players_all, enemies, exclude_player_name=player.name)
     visible_cells = compute_visible_cells(player.cell, door_states, opaque_cells)
@@ -1121,6 +1237,10 @@ def update_visibility_from_player(
                 visible_objects.add((definition.object_id, placement_index))
 
     for door_key in door_states.keys():
+        # Never auto-reveal hidden (secret) doors — they must be found via
+        # the "Search for Secret Doors" action.
+        if secret_door_keys and door_key in secret_door_keys:
+            continue
         col, row, direction = door_key
         adjacent = {(col, row)}
         delta_col, delta_row = DIR_OFFSETS[direction]
@@ -1236,26 +1356,31 @@ def load_door_sprites(
     door_open_path: pathlib.Path | None,
     door_closed_path: pathlib.Path | None,
     board: Board,
-) -> dict[tuple[bool, str], pygame.Surface]:
-    sprites: dict[tuple[bool, str], pygame.Surface] = {}
+    door_secret_path: pathlib.Path | None = None,
+) -> dict[tuple[bool | str, str], pygame.Surface]:
+    sprites: dict[tuple[bool | str, str], pygame.Surface] = {}
     base_length = max(8, int(round(board.cell_size * 0.72)))
     base_thickness = max(6, int(round(board.cell_size * 0.18)))
     scale = 1.8
     door_length = max(8, int(round(base_length * scale)))
     door_thickness = max(6, int(round(base_thickness * scale)))
 
-    def make_raw(path: pathlib.Path | None, opened: bool) -> pygame.Surface:
+    def make_raw(path: pathlib.Path | None, opened: bool, secret: bool = False) -> pygame.Surface:
         if path and path.exists():
             return pygame.image.load(str(path)).convert_alpha()
 
         fallback = pygame.Surface((door_length, door_thickness), pygame.SRCALPHA)
-        fill = (175, 120, 65, 240) if opened else (120, 80, 45, 240)
+        if secret:
+            fill = (60, 48, 90, 240)
+        else:
+            fill = (175, 120, 65, 240) if opened else (120, 80, 45, 240)
         pygame.draw.rect(fallback, fill, fallback.get_rect(), border_radius=3)
         pygame.draw.rect(fallback, (20, 16, 12, 220), fallback.get_rect(), 1, border_radius=3)
         return fallback
 
     raw_open = make_raw(door_open_path, True)
     raw_closed = make_raw(door_closed_path, False)
+    raw_secret = make_raw(door_secret_path, False, secret=True)
     # Door source art is horizontal: keep N/S horizontal, rotate E/W by 90 degrees.
     rotation_by_dir = {"N": 0, "E": -90, "S": 0, "W": 90}
 
@@ -1269,8 +1394,10 @@ def load_door_sprites(
 
         open_img = pygame.transform.rotate(raw_open, angle)
         closed_img = pygame.transform.rotate(raw_closed, angle)
+        secret_img = pygame.transform.rotate(raw_secret, angle)
         sprites[(True, direction)] = pygame.transform.smoothscale(open_img, target_size)
         sprites[(False, direction)] = pygame.transform.smoothscale(closed_img, target_size)
+        sprites[("secret", direction)] = pygame.transform.smoothscale(secret_img, target_size)
 
     return sprites
 
@@ -1279,18 +1406,41 @@ def draw_doors_on_board(
     screen: pygame.Surface,
     board: Board,
     door_states: dict[DoorKey, bool],
-    door_sprites: dict[tuple[bool, str], pygame.Surface],
+    door_sprites: dict[tuple[bool | str, str], pygame.Surface],
     visible_doors: set[DoorKey],
     reveal_all: bool,
+    secret_door_keys: set[DoorKey] | None = None,
+    secret_door_reveal_times: dict[DoorKey, int] | None = None,
 ) -> None:
+    secret_door_keys = secret_door_keys or set()
+    secret_door_reveal_times = secret_door_reveal_times or {}
+    now = pygame.time.get_ticks()
+    SECRET_FADE_MS = 1000
     for col, row, direction in door_states:
         if not reveal_all and (col, row, direction) not in visible_doors:
             continue
         opened = door_states[(col, row, direction)]
-        sprite = door_sprites.get((opened, direction))
+        # Revealed-but-still-closed secret doors use the distinctive secret sprite.
+        if not opened and (col, row, direction) in secret_door_keys:
+            sprite_key: tuple[bool | str, str] = ("secret", direction)
+        else:
+            sprite_key = (opened, direction)
+        sprite = door_sprites.get(sprite_key)
         if sprite is None:
             continue
         sprite_rect = door_sprite_rect(board, (col, row, direction), sprite)
+
+        # Fade-in for newly revealed secret doors.
+        reveal_time = secret_door_reveal_times.get((col, row, direction))
+        if reveal_time is not None:
+            elapsed = now - reveal_time
+            if elapsed < SECRET_FADE_MS:
+                alpha = int(255 * elapsed / SECRET_FADE_MS)
+                fading = sprite.copy()
+                fading.set_alpha(alpha)
+                screen.blit(fading, sprite_rect)
+                continue
+
         screen.blit(sprite, sprite_rect)
 
 
@@ -1345,6 +1495,112 @@ def draw_hovered_door_highlight(
         HOVER_HIGHLIGHT_WIDTH,
         border_radius=3,
     )
+
+
+def load_dungeon_rooms() -> list[list[tuple[int, int, int, int]]]:
+    """Load rooms from dungeon.json.
+
+    Each room is a list of rectangles (col_min, row_min, col_max, row_max),
+    because a room can be non-rectangular (composed of several rect pieces).
+    """
+    data_file = SRC_DIR.parent / "data" / "maps" / "dungeon.json"
+    if not data_file.exists():
+        return []
+    with data_file.open() as f:
+        payload = json.load(f)
+    rooms: list[list[tuple[int, int, int, int]]] = []
+    for room_entry in payload.get("rooms", []):
+        # A room entry is a list of rectangles: [[ul, lr], [ul, lr], ...]
+        # But for backwards compat with a single-rect room written as [ul, lr]
+        # where ul/lr are [x, y] lists, detect which form we have.
+        if not isinstance(room_entry, list) or len(room_entry) == 0:
+            continue
+        # Single-rect shorthand: [[x1,y1],[x2,y2]]
+        if isinstance(room_entry[0], list) and len(room_entry[0]) == 2 and isinstance(room_entry[0][0], (int, float)):
+            ul, lr = room_entry[0], room_entry[1]
+            rooms.append([(int(ul[0]), int(ul[1]), int(lr[0]), int(lr[1]))])
+        else:
+            # Multi-rect form: [[[x1,y1],[x2,y2]], [[x1,y1],[x2,y2]], ...]
+            rects: list[tuple[int, int, int, int]] = []
+            for rect in room_entry:
+                if not isinstance(rect, list) or len(rect) != 2:
+                    continue
+                ul, lr = rect
+                if not isinstance(ul, list) or not isinstance(lr, list):
+                    continue
+                rects.append((int(ul[0]), int(ul[1]), int(lr[0]), int(lr[1])))
+            if rects:
+                rooms.append(rects)
+    return rooms
+
+
+def get_room_indices_for_cell(
+    col: int,
+    row: int,
+    rooms: list[list[tuple[int, int, int, int]]],
+) -> set[int]:
+    """Return the set of room indices that contain the given cell.
+
+    A door sits on a wall between two cells.  To handle the case where a
+    secret door is placed in the wall between two rooms (the door's cell
+    belongs to room A but can also be reached from room B), we check both
+    the cell itself *and* the four orthogonally adjacent cells so that a
+    player standing just inside either room will detect the door.
+    """
+    candidates = [(col, row)]
+    for dc, dr in ((0, -1), (1, 0), (0, 1), (-1, 0)):
+        candidates.append((col + dc, row + dr))
+
+    found: set[int] = set()
+    for c, r in candidates:
+        for room_idx, rects in enumerate(rooms):
+            for (c_min, r_min, c_max, r_max) in rects:
+                if c_min <= c <= c_max and r_min <= r <= r_max:
+                    found.add(room_idx)
+                    break
+    return found
+
+
+def search_for_secret_doors(
+    player: PlayerClass,
+    door_states: dict[DoorKey, bool],
+    secret_door_keys: set[DoorKey],
+    rooms: list[list[tuple[int, int, int, int]]],
+    visible_doors: set[DoorKey],
+) -> list[DoorKey]:
+    """Reveal hidden doors in the same room(s) as the player.
+
+    Returns the list of newly revealed DoorKeys (empty if none found or
+    player is not in any room).
+    """
+    if not isinstance(player.cell, tuple) or len(player.cell) != 2:
+        return []
+
+    p_col, p_row = player.cell
+    player_rooms: set[int] = set()
+    for room_idx, rects in enumerate(rooms):
+        for (c_min, r_min, c_max, r_max) in rects:
+            if c_min <= p_col <= c_max and r_min <= p_row <= r_max:
+                player_rooms.add(room_idx)
+                break
+
+    if not player_rooms:
+        # Player is in a corridor — no rooms to search.
+        return []
+
+    revealed: list[DoorKey] = []
+    for door_key in secret_door_keys:
+        if door_key in visible_doors:
+            continue  # Already found
+        if door_states.get(door_key, True):
+            continue  # Already opened (shouldn't happen, but guard)
+        d_col, d_row, _ = door_key
+        door_rooms = get_room_indices_for_cell(d_col, d_row, rooms)
+        if player_rooms & door_rooms:
+            visible_doors.add(door_key)
+            revealed.append(door_key)
+
+    return revealed
 
 
 def try_open_clicked_door(
@@ -1412,8 +1668,20 @@ def draw_turn_controls(
     hide_controls: bool,
     title_font: pygame.font.Font,
     text_font: pygame.font.Font,
+    zargon_active: bool = False,
 ) -> tuple[dict[str, pygame.Rect], pygame.Rect]:
     rects: dict[str, pygame.Rect] = {}
+
+    if zargon_active:
+        heading = title_font.render("Zargon's Turn", True, (210, 60, 60))
+        screen.blit(heading, (panel_rect.x + 16, start_y + 4))
+        status_surface = text_font.render("Enemies are acting…", True, TEXT_COLOR)
+        screen.blit(status_surface, (panel_rect.x + 16, start_y + 40))
+        controls_area = pygame.Rect(
+            panel_rect.x + 8, start_y, panel_rect.width - 16, 60
+        )
+        return rects, controls_area
+
     heading = title_font.render(f"{player.name}'s Turn", True, ACCENT_COLOR)
     screen.blit(heading, (panel_rect.x + 16, start_y + 4))
 
@@ -1647,6 +1915,7 @@ def build_enemy_menu_rows(
                 "name": type_name,
                 "hp": int(enemy.get("hp", enemy.get("max_hp", 1))),
                 "max_hp": int(enemy.get("max_hp", enemy.get("hp", 1))),
+                "move": int(enemy.get("move", 0)),
                 "attack_dice": int(enemy.get("attack_dice", 0)),
                 "defense_dice": int(enemy.get("defense_dice", 0)),
                 "mind": int(enemy.get("mind", 0)),
@@ -1709,6 +1978,7 @@ def extract_quest_enemies(quest_payload: dict, enemy_catalog: list[dict]) -> lis
             "attack_dice": int(template.get("attack_dice", 0)),
             "defense_dice": int(template.get("defense_dice", 0)),
             "mind": int(template.get("mind", 0)),
+            "move": int(template.get("move", 0)),
             "icon_file": str(template.get("icon_file", "")),
             "dying_sound": str(template.get("dying_sound", "")),
             "color": tuple(template.get("color", [220, 40, 40])),
@@ -1750,6 +2020,112 @@ def draw_panel_transition(screen: pygame.Surface, panel_rect: pygame.Rect, trans
     if not target_rect:
         return
     progress = transition["elapsed"] / max(1, transition["duration"])
+
+def new_zargon_state() -> dict:
+    """Return fresh state for the enemy (Zargon) AI turn."""
+    return {
+        # List of enemy indices that still need to act this turn (shuffled).
+        "enemy_queue": [],
+        # Index into enemies[] that is currently acting, or None.
+        "current_enemy_idx": None,
+        # Remaining movement steps for the current enemy.
+        "steps_left": 0,
+        # Timestamp of the last step movement (ms), used for pacing.
+        "step_timer": 0,
+        # ms between each movement step animation.
+        "step_interval_ms": 220,
+        # Sub-phase for the current enemy: "move" or "attack" or "done".
+        "phase": "idle",
+        # Enemy-attacks-hero dialog (same shape as hero attack_dialog but
+        # "attacker" is an enemy dict and "defender_index" indexes players).
+        "attack_dialog": None,
+        # Timestamp when the auto-advance dialog phase started.
+        "dialog_phase_start": 0,
+        # ms per dialog phase (0 → 1 → 2) during auto-advance.
+        "dialog_phase_ms": 900,
+    }
+
+
+def enemy_next_step_toward_heroes(
+    enemy_cell: tuple[int, int],
+    heroes: list[PlayerClass],
+    all_enemies: list[dict],
+    door_states: dict,
+) -> tuple[int, int] | None:
+    """BFS from enemy_cell toward the nearest live hero.
+
+    Returns the first step cell (adjacent to enemy_cell) that is on the
+    shortest path toward any hero, or None if already adjacent / no path.
+    """
+    live_hero_cells = {
+        p.cell
+        for p in heroes
+        if isinstance(p.cell, tuple) and len(p.cell) == 2 and not getattr(p, "dying", False)
+    }
+    if not live_hero_cells:
+        return None
+
+    # Already adjacent to a hero with no wall between them? → no movement needed.
+    ec_col, ec_row = enemy_cell
+    for hero_cell in live_hero_cells:
+        if cells_are_attack_adjacent(enemy_cell, hero_cell, door_states):
+            return None
+
+    # BFS outward from enemy_cell; stop when a hero cell is reached.
+    # Enemies cannot move through other enemies or heroes (hero cells are
+    # treated as hard stop but reachable for targeting purposes).
+    enemy_occupied = {
+        e.get("cell")
+        for e in all_enemies
+        if isinstance(e.get("cell"), tuple) and e.get("cell") != enemy_cell and not e.get("dying")
+    }
+    hero_occupied = set(live_hero_cells)
+
+    visited: set[tuple[int, int]] = {enemy_cell}
+    # Each queue item: (cell, first_step) — first_step is the immediate
+    # neighbour we took from enemy_cell to reach this cell.
+    frontier: list[tuple[tuple[int, int], tuple[int, int]]] = []
+
+    for direction, (dc, dr) in DIR_OFFSETS.items():
+        nc, nr = ec_col + dc, ec_row + dr
+        if not dungeon_map.in_bounds(nc, nr):
+            continue
+        if not is_passable_with_doors(ec_col, ec_row, direction, door_states):
+            continue
+        target_kind = dungeon_map.cell_kind(nc, nr)
+        if target_kind in {CellKind.VOID, CellKind.BLOCKED}:
+            continue
+        ncell = (nc, nr)
+        if ncell in enemy_occupied:
+            continue
+        visited.add(ncell)
+        frontier.append((ncell, ncell))
+
+    while frontier:
+        cur_cell, first_step = frontier.pop(0)
+        if cur_cell in hero_occupied:
+            return first_step
+
+        cc, cr = cur_cell
+        for direction, (dc, dr) in DIR_OFFSETS.items():
+            nc, nr = cc + dc, cr + dr
+            if not dungeon_map.in_bounds(nc, nr):
+                continue
+            ncell = (nc, nr)
+            if ncell in visited:
+                continue
+            if not is_passable_with_doors(cc, cr, direction, door_states):
+                continue
+            target_kind = dungeon_map.cell_kind(nc, nr)
+            if target_kind in {CellKind.VOID, CellKind.BLOCKED}:
+                continue
+            if ncell in enemy_occupied:
+                continue
+            visited.add(ncell)
+            frontier.append((ncell, first_step))
+
+    return None
+
 
 def new_turn_state() -> dict:
     return {
@@ -1811,6 +2187,11 @@ def run_splash(
     while fade_elapsed < fade_ms:
         dt = clock.tick(60)
         fade_elapsed += dt
+        # Drain events so they don't pile up and fire spuriously in the game loop.
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                raise SystemExit(0)
         alpha = min(255, int(255 * fade_elapsed / fade_ms)) if fade_ms else 255
         fade.set_alpha(alpha)
         screen.blit(splash, (0, 0))
@@ -1844,6 +2225,7 @@ def main() -> int:
     # Apply final gameplay display mode after splash.
     if cfg["FULLSCREEN"]:
         screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+        pygame.event.clear()
 
     players = load_players()
     enemy_catalog = load_enemies()
@@ -1856,7 +2238,12 @@ def main() -> int:
     object_definitions = load_object_definitions()
     solid_rock_cells: set[tuple[int, int]] = set()
     door_states: dict[DoorKey, bool] = {}
-    door_open_path, door_closed_path = load_door_image_paths()
+    secret_door_keys: set[DoorKey] = set()
+    # Maps a newly-revealed secret door key to the ticks timestamp when it was
+    # revealed, so draw_doors_on_board can fade it in over 1 second.
+    secret_door_reveal_times: dict[DoorKey, int] = {}
+    door_open_path, door_closed_path, door_secret_path = load_door_image_paths()
+    dungeon_rooms = load_dungeon_rooms()
     reveal_all = False
     los_debug_overlay = False
     visible_objects: set[ObjectInstanceKey] = set()
@@ -1872,7 +2259,7 @@ def main() -> int:
             validate_doors(quest_payload, DEBUG_DEFAULT_QUEST)
             apply_quest_object_placements(object_definitions, quest_payload)
             solid_rock_cells = extract_solid_rock_cells(quest_payload)
-            door_states = extract_door_states(quest_payload)
+            door_states, secret_door_keys = extract_door_states(quest_payload)
             enemies = extract_quest_enemies(quest_payload, enemy_catalog)
             assign_players_to_stairs_start(players, object_definitions)
             apply_furniture_blocking_to_world(object_definitions)
@@ -1885,7 +2272,7 @@ def main() -> int:
         dict[str, pygame.Surface],
         list[pygame.Surface],
         dict[tuple[str, tuple[int, int], int], pygame.Surface],
-        dict[tuple[bool, str], pygame.Surface],
+        dict[tuple[bool | str, str], pygame.Surface],
     ]:
         screen_w, screen_h = screen.get_size()
         panel_w = min(360, max(280, screen_w // 4))
@@ -1918,7 +2305,7 @@ def main() -> int:
                     rotation=rotation,
                     fill_ratio=0.9,
                 )
-        door_sprites = load_door_sprites(door_open_path, door_closed_path, game_board)
+        door_sprites = load_door_sprites(door_open_path, door_closed_path, game_board, door_secret_path)
         return menu_rect, game_board, menu_icons, board_icons, enemy_icons, object_sprites, door_sprites
 
     panel_rect, board, menu_icons, board_icons, enemy_icons, object_sprites, door_sprites = build_layout()
@@ -1927,25 +2314,8 @@ def main() -> int:
     panel_transition = new_panel_transition()
     control_rects: dict[str, pygame.Rect] = {}
     controls_area_rect = pygame.Rect(0, 0, 0, 0)
-
-    # Pre-populate control_rects before the first frame so that an early click
-    # (e.g. immediately after the splash) is never dropped due to empty rects.
-    _dummy = pygame.Surface(screen.get_size())
-    control_rects, controls_area_rect = draw_turn_controls(
-        _dummy,
-        panel_rect,
-        panel_rect.y + 64 + (len(players) + 1) * 82 + 44 + 12,
-        (0, 0),
-        players[active_player_index],
-        turn_state,
-        dice_faces,
-        0,
-        False,
-        False,
-        title_font,
-        text_font,
-    )
-    del _dummy
+    # Zargon (enemy AI) turn state; None means it's not Zargon's turn.
+    zargon_state: dict | None = None
 
     # Debris is decorative and should be visible from the start.
     for definition in object_definitions:
@@ -1964,7 +2334,39 @@ def main() -> int:
             visible_objects,
             visible_doors,
             visible_enemies,
+            secret_door_keys,
         )
+
+    # Pre-populate control_rects AFTER the initial visibility pass so that
+    # enemy_menu_rows reflects the real starting state (same as frame 1).
+    _dummy = pygame.Surface(screen.get_size())
+    _dummy_enemy_rows = build_enemy_menu_rows(enemies, enemy_icons, visible_enemies, reveal_all)
+    _, _controls_y = draw_left_menu(
+        _dummy,
+        panel_rect,
+        (-1, -1),
+        players,
+        menu_icons,
+        players[active_player_index].name,
+        _dummy_enemy_rows,
+        title_font,
+        text_font,
+    )
+    control_rects, controls_area_rect = draw_turn_controls(
+        _dummy,
+        panel_rect,
+        _controls_y + 12,
+        (-1, -1),
+        players[active_player_index],
+        turn_state,
+        dice_faces,
+        0,
+        False,
+        False,
+        title_font,
+        text_font,
+    )
+    del _dummy
 
     def open_attack_dialog(attacker: PlayerClass, target_index: int) -> None:
         if not (0 <= target_index < len(enemies)):
@@ -1978,9 +2380,12 @@ def main() -> int:
         turn_state["attack_dialog"] = {
             "target_index": target_index,
             "outcome": outcome,
-            "phase": 0,
+            "phase": 0,          # player must click to roll attacker dice
             "attacker_rotations": roll_dice_rotations(len(outcome["attack_rolls"])),
             "defender_rotations": roll_dice_rotations(len(outcome["defense_rolls"])),
+            # phase1_rolled_at: set when attacker dice are shown, triggers
+            # the 1-second automatic defender roll.
+            "phase1_rolled_at": None,
         }
         start_panel_transition(panel_transition, controls_area_rect)
 
@@ -2005,6 +2410,43 @@ def main() -> int:
             if event.type == pygame.MOUSEBUTTONDOWN:
                 mouse_pos = event.pos
 
+                # During Zargon's turn, only allow clicks when the enemy-attack
+                # dialog is waiting for the player (phase 1 = roll defence dice,
+                # phase 2 = close / resolve).
+                if zargon_state is not None:
+                    zdialog = zargon_state.get("attack_dialog")
+                    if event.button == 1 and zdialog is not None:
+                        zphase = int(zdialog.get("phase", 0))
+                        now_click = pygame.time.get_ticks()
+                        if zphase == 1:
+                            # Player rolls the hero's defence dice
+                            audio_mod.play_sfx("dice_roll")
+                            outcome = zdialog["outcome"]
+                            zdialog["defender_rotations"] = roll_dice_rotations(len(outcome["defense_rolls"]))
+                            sfx_list = ["shield.mp3" for _ in range(int(outcome["saves"]))]
+                            sfx_list += ["damage.mp3" for _ in range(int(outcome["damage"]))]
+                            zdialog["sfx_queue"] = sfx_list
+                            zdialog["sfx_next_time"] = now_click + 600
+                            zdialog["phase"] = 2
+                            zargon_state["dialog_phase_start"] = now_click
+                            # Apply damage immediately so the left menu shows
+                            # the updated HP while the result dialog is still open.
+                            defender_idx = int(zdialog.get("defender_index", 0))
+                            if 0 <= defender_idx < len(players):
+                                hero = players[defender_idx]
+                                hero.hp = int(outcome["defender_hp_after"])
+                                if outcome["defender_dead"]:
+                                    dying_sound = str(getattr(hero, "dying_sound", ""))
+                                    if dying_sound:
+                                        audio_mod.play_named_sound(dying_sound)
+                                    hero.dying = True
+                                    hero.death_start = now_click
+                        elif zphase == 2:
+                            # HP already applied at phase 1→2 transition; just close.
+                            zargon_state["attack_dialog"] = None
+                            zargon_state["phase"] = "next"
+                    continue
+
                 if event.button == 3 and turn_state["mode"] == "move":
                     origin = turn_state["move_origin_cell"]
                     if origin is not None:
@@ -2025,39 +2467,29 @@ def main() -> int:
                 if event.button == 1:
                     if turn_state["attack_dialog"] is not None:
                         dialog = turn_state["attack_dialog"]
-                        phase = int(dialog.get("phase", 0))
                         outcome = dialog["outcome"]
+                        phase = int(dialog.get("phase", 0))
+                        now_click = pygame.time.get_ticks()
                         if phase == 0:
+                            # First click: roll attacker dice; defender rolls
+                            # automatically after 1 second.
                             audio_mod.play_sfx("dice_roll")
-                            dialog["attacker_rotations"] = roll_dice_rotations(len(outcome["attack_rolls"]))
-                            # Queue individual dice SFX (sword) to play with 1s spacing
                             sfx_list: list[str] = ["sword.mp3" for _ in range(int(outcome["skulls"]))]
                             dialog["sfx_queue"] = sfx_list
-                            # Start after 1 second
-                            dialog["sfx_next_time"] = pygame.time.get_ticks() + 1000
+                            dialog["sfx_next_time"] = now_click + 800
                             dialog["phase"] = 1
-                        elif phase == 1:
-                            audio_mod.play_sfx("dice_roll")
-                            dialog["defender_rotations"] = roll_dice_rotations(len(outcome["defense_rolls"]))
-                            # Queue defender sfx (shield then damage) with 1s spacing
-                            sfx_list = ["shield.mp3" for _ in range(int(outcome["saves"]))]
-                            sfx_list += ["damage.mp3" for _ in range(int(outcome["damage"]))]
-                            dialog["sfx_queue"] = sfx_list
-                            dialog["sfx_next_time"] = pygame.time.get_ticks() + 1000
-                            dialog["phase"] = 2
-                        else:
+                            dialog["phase1_rolled_at"] = now_click
+                        elif phase == 2:
+                            # Second click: resolve combat and close dialog.
                             target_index = int(dialog["target_index"])
                             if 0 <= target_index < len(enemies):
                                 enemies[target_index]["hp"] = int(outcome["defender_hp_after"])
                                 if outcome["defender_dead"]:
-                                    # Start death animation instead of immediate removal.
                                     dying_sound = str(enemies[target_index].get("dying_sound", ""))
                                     if dying_sound:
-                                        play_named_sound(dying_sound)
-                                    now = pygame.time.get_ticks()
+                                        audio_mod.play_named_sound(dying_sound)
                                     enemies[target_index]["dying"] = True
-                                    enemies[target_index]["death_start"] = now
-                                    # Remove from visible/enemy targeting sets immediately
+                                    enemies[target_index]["death_start"] = now_click
                                     visible_enemies = {i for i in visible_enemies if i != target_index}
                             turn_state["acted"] = True
                             turn_state["selected_action"] = "Attack"
@@ -2088,7 +2520,7 @@ def main() -> int:
                         and turn_state["attack_dialog"] is None
                         and clicked_cell is not None
                     ):
-                        adjacent_targets = adjacent_enemy_indexes(active_player.cell, enemies)
+                        adjacent_targets = adjacent_enemy_indexes(active_player.cell, enemies, door_states)
                         target_index = next(
                             (
                                 idx
@@ -2111,6 +2543,8 @@ def main() -> int:
                     )
                     if opened_door:
                         audio_mod.play_sfx("door_open")
+                        # A secret door becomes a normal door once opened.
+                        secret_door_keys.discard(opened_door)
                         reveal_room_from_opened_door(
                             opened_door,
                             door_states,
@@ -2129,6 +2563,7 @@ def main() -> int:
                             visible_objects,
                             visible_doors,
                             visible_enemies,
+                            secret_door_keys,
                         )
                         if turn_state["mode"] == "move":
                             turn_state["reachable_costs"], turn_state["reachable_prev"] = compute_reachable_cells(
@@ -2161,6 +2596,7 @@ def main() -> int:
                                     visible_objects,
                                     visible_doors,
                                     visible_enemies,
+                                    secret_door_keys,
                                 )
                             audio_mod.play_sfx("move")
                             turn_state["move_points"] = max(0, turn_state["move_points"] - move_cost)
@@ -2187,7 +2623,6 @@ def main() -> int:
                         and not turn_state["moved"]
                         and not turn_state["move_locked"]
                     ):
-                        audio_mod.play_sfx("click")
                         die_one = random.randint(1, 6)
                         die_two = random.randint(1, 6)
                         audio_mod.play_sfx("dice_roll")
@@ -2232,7 +2667,11 @@ def main() -> int:
 
                     if control_rects.get("pass_turn") and control_rects["pass_turn"].collidepoint(mouse_pos):
                         audio_mod.play_sfx("click")
-                        active_player_index = (active_player_index + 1) % len(players)
+                        next_index = (active_player_index + 1) % len(players)
+                        if next_index == 0 and zargon_state is None:
+                            # All heroes have passed — start Zargon's turn.
+                            zargon_state = new_zargon_state()
+                        active_player_index = next_index
                         turn_state = new_turn_state()
                         active_player = players[active_player_index]
                         start_panel_transition(panel_transition, controls_area_rect)
@@ -2246,7 +2685,7 @@ def main() -> int:
                                 # only enabled when there are adjacent enemies.
                                 enabled = True
                                 if action_name.upper() == "ATTACK":
-                                    attack_candidates = adjacent_enemy_indexes(active_player.cell, enemies)
+                                    attack_candidates = adjacent_enemy_indexes(active_player.cell, enemies, door_states)
                                     enabled = bool(attack_candidates)
                                 if not enabled:
                                     # Consume the click but do nothing (no sound)
@@ -2261,6 +2700,27 @@ def main() -> int:
                                     start_panel_transition(panel_transition, controls_area_rect)
                                     break
 
+                                if action_name.upper() == "SEARCH FOR SECRET DOORS":
+                                    newly_found = search_for_secret_doors(
+                                        active_player,
+                                        door_states,
+                                        secret_door_keys,
+                                        dungeon_rooms,
+                                        visible_doors,
+                                    )
+                                    if newly_found:
+                                        now_reveal = pygame.time.get_ticks()
+                                        for dk in newly_found:
+                                            secret_door_reveal_times[dk] = now_reveal
+                                        audio_mod.play_named_sound("secret_found.mp3")
+                                    else:
+                                        audio_mod.play_named_sound("fail.mp3")
+                                    turn_state["acted"] = True
+                                    turn_state["selected_action"] = action_name
+                                    turn_state["mode"] = None
+                                    start_panel_transition(panel_transition, controls_area_rect)
+                                    break
+
                                 audio_mod.play_sfx("click")
                                 turn_state["acted"] = True
                                 turn_state["selected_action"] = action_name
@@ -2272,26 +2732,187 @@ def main() -> int:
                             continue
 
                     if turn_state["moved"] and turn_state["acted"]:
-                        active_player_index = (active_player_index + 1) % len(players)
+                        next_index = (active_player_index + 1) % len(players)
+                        if next_index == 0 and zargon_state is None:
+                            # All heroes have acted — start Zargon's turn.
+                            zargon_state = new_zargon_state()
+                        active_player_index = next_index
                         turn_state = new_turn_state()
                         active_player = players[active_player_index]
                         start_panel_transition(panel_transition, controls_area_rect)
 
-        # Process queued combat SFX (play one per second) when an attack dialog is active.
+        # Process queued combat SFX and automatic phase advance for hero attack dialog.
         if turn_state.get("attack_dialog") is not None:
             dialog = turn_state["attack_dialog"]
+            now = pygame.time.get_ticks()
+
+            # After the attacker dice are shown (phase 1), automatically roll
+            # the defender dice 1 second later.
+            if int(dialog.get("phase", 0)) == 1:
+                rolled_at = dialog.get("phase1_rolled_at")
+                if rolled_at is not None and now - rolled_at >= 1000:
+                    outcome = dialog["outcome"]
+                    audio_mod.play_sfx("dice_roll")
+                    sfx_list = ["shield.mp3" for _ in range(int(outcome["saves"]))]
+                    sfx_list += ["damage.mp3" for _ in range(int(outcome["damage"]))]
+                    existing = dialog.get("sfx_queue") or []
+                    dialog["sfx_queue"] = existing + sfx_list
+                    if dialog.get("sfx_next_time") is None:
+                        dialog["sfx_next_time"] = now + 600
+                    dialog["phase"] = 2
+                    dialog["phase1_rolled_at"] = None
+
             sfx_queue = dialog.get("sfx_queue")
             next_time = dialog.get("sfx_next_time")
             if sfx_queue and next_time is not None:
-                now = pygame.time.get_ticks()
                 if now >= next_time and len(sfx_queue) > 0:
                     sound_file = sfx_queue.pop(0)
-                    play_named_sound(sound_file)
-                    # schedule next sound in 1000 ms if any remain
-                    dialog["sfx_next_time"] = now + 1000 if sfx_queue else None
+                    audio_mod.play_named_sound(sound_file)
+                    dialog["sfx_next_time"] = now + 700 if sfx_queue else None
                 if not sfx_queue:
                     dialog.pop("sfx_queue", None)
                     dialog.pop("sfx_next_time", None)
+
+        # ── Zargon (enemy AI) turn update ────────────────────────────────
+        if zargon_state is not None:
+            zs = zargon_state
+            now = pygame.time.get_ticks()
+
+            # ── Phase: auto-advance enemy→hero attack dialog ──────────────
+            if zs["attack_dialog"] is not None:
+                zdialog = zs["attack_dialog"]
+                zphase = int(zdialog.get("phase", 0))
+                elapsed_in_phase = now - zs["dialog_phase_start"]
+
+                # Only phase 0 (enemy attack roll) is automatic; phases 1+
+                # are driven by the player clicking.
+                if zphase == 0 and elapsed_in_phase >= zs["dialog_phase_ms"]:
+                    # Auto-roll attacker dice (enemy skulls)
+                    audio_mod.play_sfx("dice_roll")
+                    outcome = zdialog["outcome"]
+                    zdialog["attacker_rotations"] = roll_dice_rotations(len(outcome["attack_rolls"]))
+                    sfx_list = ["sword.mp3" for _ in range(int(outcome["skulls"]))]
+                    zdialog["sfx_queue"] = sfx_list
+                    zdialog["sfx_next_time"] = now + 600
+                    zdialog["phase"] = 1
+                    zs["dialog_phase_start"] = now
+
+                # Process queued SFX for zargon dialog
+                sfx_queue = zdialog.get("sfx_queue")
+                sfx_next = zdialog.get("sfx_next_time")
+                if sfx_queue and sfx_next is not None and now >= sfx_next:
+                    audio_mod.play_named_sound(sfx_queue.pop(0))
+                    zdialog["sfx_next_time"] = now + 700 if sfx_queue else None
+                    if not sfx_queue:
+                        zdialog.pop("sfx_queue", None)
+                        zdialog.pop("sfx_next_time", None)
+
+            # ── Phase: initialize or advance to next enemy ─────────────────
+            elif zs["phase"] in ("idle", "next"):
+                if zs["phase"] == "idle":
+                    # Build queue of visible enemies (in random order)
+                    candidates = [i for i in visible_enemies if not enemies[i].get("dying")]
+                    random.shuffle(candidates)
+                    zs["enemy_queue"] = candidates
+                # Pop next enemy from queue
+                while zs["enemy_queue"]:
+                    idx = zs["enemy_queue"].pop(0)
+                    if idx < len(enemies) and not enemies[idx].get("dying"):
+                        zs["current_enemy_idx"] = idx
+                        move_max = int(enemies[idx].get("move", 0))
+                        zs["steps_left"] = move_max
+                        zs["step_timer"] = now
+                        zs["phase"] = "move"
+                        break
+                else:
+                    # Queue empty — Zargon's turn is over
+                    zargon_state = None
+
+            # ── Phase: move current enemy one step at a time ───────────────
+            elif zs["phase"] == "move":
+                idx = zs["current_enemy_idx"]
+                if idx is None or idx >= len(enemies) or enemies[idx].get("dying"):
+                    zs["phase"] = "next"
+                elif zs["steps_left"] <= 0:
+                    zs["phase"] = "attack"
+                elif now - zs["step_timer"] >= zs["step_interval_ms"]:
+                    enemy = enemies[idx]
+                    next_cell = enemy_next_step_toward_heroes(
+                        enemy["cell"], players, enemies, door_states
+                    )
+                    if next_cell is not None:
+                        old_cell = enemy["cell"]
+                        enemy["cell"] = next_cell
+                        # Reveal the enemy's new cell to players
+                        for player in players:
+                            update_visibility_from_player(
+                                player, players, door_states, object_definitions,
+                                enemies, visible_objects, visible_doors, visible_enemies,
+                                secret_door_keys,
+                            )
+                        audio_mod.play_sfx("move")
+                        zs["steps_left"] -= 1
+                        zs["step_timer"] = now
+                        # Check adjacency (no wall): if now adjacent to a hero, stop and attack
+                        live_heroes = [p for p in players if not getattr(p, "dying", False)]
+                        adjacent_hero = next(
+                            (
+                                p for p in live_heroes
+                                if isinstance(p.cell, tuple) and
+                                cells_are_attack_adjacent(enemy["cell"], p.cell, door_states)
+                            ),
+                            None,
+                        )
+                        if adjacent_hero is not None:
+                            zs["steps_left"] = 0
+                            zs["phase"] = "attack"
+                    else:
+                        # No valid step (already adjacent or blocked)
+                        zs["steps_left"] = 0
+                        zs["phase"] = "attack"
+
+            # ── Phase: enemy attacks adjacent hero ─────────────────────────
+            elif zs["phase"] == "attack":
+                idx = zs["current_enemy_idx"]
+                if idx is None or idx >= len(enemies) or enemies[idx].get("dying"):
+                    zs["phase"] = "next"
+                else:
+                    enemy = enemies[idx]
+                    live_heroes = [
+                        (hi, p)
+                        for hi, p in enumerate(players)
+                        if not getattr(p, "dying", False)
+                        and isinstance(p.cell, tuple)
+                        and cells_are_attack_adjacent(enemy["cell"], p.cell, door_states)
+                    ]
+                    if live_heroes:
+                        # Pick random adjacent hero to attack
+                        hero_idx, hero = random.choice(live_heroes)
+                        outcome = compute_attack_outcome_enemy(enemy, hero)
+                        attacker_icon = enemy_icons[idx] if idx < len(enemy_icons) else None
+                        defender_icon = menu_icons.get(hero.name)
+                        if attacker_icon is None:
+                            attacker_icon = pygame.Surface((44, 44))
+                            attacker_icon.fill((220, 40, 40))
+                        if defender_icon is None:
+                            defender_icon = pygame.Surface((44, 44))
+                            defender_icon.fill((100, 100, 200))
+                        zs["attack_dialog"] = {
+                            "enemy_index": idx,
+                            "defender_index": hero_idx,
+                            "outcome": outcome,
+                            "phase": 0,
+                            "attacker_rotations": roll_dice_rotations(len(outcome["attack_rolls"])),
+                            "defender_rotations": roll_dice_rotations(len(outcome["defense_rolls"])),
+                            "attacker_icon": attacker_icon,
+                            "defender_icon": defender_icon,
+                            "attacker_name": str(enemy.get("display_name", enemy.get("name", "Enemy"))),
+                            "defender_name": hero.name,
+                        }
+                        zs["dialog_phase_start"] = now
+                        zs["phase"] = "dialog"
+                    else:
+                        zs["phase"] = "next"
 
         screen.fill(BACKGROUND_COLOR)
 
@@ -2303,7 +2924,7 @@ def main() -> int:
             draw_unseen_cells_overlay(screen, board, current_visible_cells)
         draw_solid_rock_overlay(screen, board, solid_rock_cells)
         draw_objects_on_board(screen, board, object_definitions, object_sprites, visible_objects, reveal_all)
-        draw_doors_on_board(screen, board, door_states, door_sprites, visible_doors, reveal_all)
+        draw_doors_on_board(screen, board, door_states, door_sprites, visible_doors, reveal_all, secret_door_keys, secret_door_reveal_times)
         draw_move_options(screen, board, turn_state["reachable_cells"])
         active_player_name = players[active_player_index].name
         attackable_enemy_indexes = set(turn_state["attack_candidates"]) if turn_state["mode"] == "attack_target" else set()
@@ -2343,6 +2964,13 @@ def main() -> int:
             visible_enemy_rows,
             title_font,
             text_font,
+            zargon_acting_enemy_name=(
+                enemies[zargon_state["current_enemy_idx"]].get("name")
+                if zargon_state is not None
+                and zargon_state.get("current_enemy_idx") is not None
+                and zargon_state["current_enemy_idx"] < len(enemies)
+                else None
+            ),
         )
 
         # Remove enemies whose death animation finished. Do this before
@@ -2426,10 +3054,11 @@ def main() -> int:
             turn_state,
             dice_faces,
             0,
-            bool(adjacent_enemy_indexes(active_player.cell, enemies)),
+            bool(adjacent_enemy_indexes(active_player.cell, enemies, door_states)),
             turn_state["attack_dialog"] is not None,
             title_font,
             text_font,
+            zargon_active=zargon_state is not None,
         )
         if turn_state["attack_dialog"] is not None:
             target_index = int(turn_state["attack_dialog"]["target_index"])
@@ -2445,6 +3074,53 @@ def main() -> int:
                     title_font,
                     text_font,
                     board,
+                )
+        # Render Zargon's (enemy→hero) attack dialog when it's active.
+        if zargon_state is not None and zargon_state.get("attack_dialog") is not None:
+            zdialog = zargon_state["attack_dialog"]
+            enemy_idx = int(zdialog.get("enemy_index", 0))
+            hero_idx = int(zdialog.get("defender_index", 0))
+            if (
+                0 <= enemy_idx < len(enemies)
+                and 0 <= hero_idx < len(players)
+            ):
+                hero = players[hero_idx]
+                enemy = enemies[enemy_idx]
+                # Build a pseudo-dict for the hero so draw_attack_dialog can render
+                # it in the "defender" column (which expects a dict).
+                hero_as_dict = {
+                    "name": hero.name,
+                    "display_name": hero.name,
+                    "attack_dice": hero.attack_dice,
+                    "defense_dice": hero.defense_dice,
+                    "hp": hero.hp,
+                    "max_hp": hero.max_hp,
+                }
+                # Use a display dialog that wraps zargon's dialog fields into the
+                # expected format for draw_attack_dialog.
+                display_dialog = {
+                    "outcome": zdialog["outcome"],
+                    "phase": zdialog.get("phase", 0),
+                    "attacker_rotations": zdialog.get("attacker_rotations", []),
+                    "defender_rotations": zdialog.get("defender_rotations", []),
+                    "target_index": enemy_idx,  # kept for compat
+                }
+                attacker_icon = zdialog.get("attacker_icon") or (
+                    enemy_icons[enemy_idx] if enemy_idx < len(enemy_icons) else pygame.Surface((44, 44))
+                )
+                defender_icon = zdialog.get("defender_icon") or menu_icons.get(hero.name, pygame.Surface((44, 44)))
+                draw_attack_dialog(
+                    screen,
+                    display_dialog,
+                    enemy,           # enemy dict as "attacker"
+                    hero_as_dict,    # hero dict as "defender"
+                    attacker_icon,
+                    defender_icon,
+                    combat_face_sprites,
+                    title_font,
+                    text_font,
+                    board,
+                    auto_advance=True,
                 )
         if tooltip:
             draw_tooltip(screen, mouse_pos, tooltip, text_font)

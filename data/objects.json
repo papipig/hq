@@ -75,5 +75,6 @@
     ],
 
     "door_open": "assets/graphics/sprites/door_open.png",
-    "door_closed": "assets/graphics/sprites/door_closed.png"
+    "door_closed": "assets/graphics/sprites/door_closed.png",
+    "door_secret": "assets/graphics/sprites/door_secret.png"
 }

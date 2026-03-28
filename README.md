@@ -6,6 +6,24 @@ Unofficial Python and pygame project for a HeroQuest-style dungeon crawler.
 
 ![HeroQuest box art](assets/graphics/misc/demo.png)
 
+## Project state
+
+What is implemented:
+* one full quest #1
+* movements
+* combats
+* enemy AI
+* hidden doors
+
+What needs to be implemented:
+* spells
+* traps
+* chest, treasures
+* multiplayer mode
+* multi-language
+* quest editor
+* other quests
+
 ## Project Layout
 
 ```text
@@ -64,3 +82,4 @@ Original code in this repository is separate from the HeroQuest intellectual pro
 ## Thanks to
 
 Thanks to `https://forum.yeoldeinn.com`, and `https://github.com/hghero/HeroQuest` for inspiration (and also I took the liberty to take graphics from them).
+Some sounds found on the internet may not be free of rights, if so please inform me and I will remove them.

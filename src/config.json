@@ -9,7 +9,7 @@
     "debug": {
         "SPLASH_DURATION_MS": 0,
         "SPLASH_FADE_MS": 0,
-        "FULLSCREEN": false,
+        "FULLSCREEN": true,
         "MUSIC": false,
         "SOUNDS": true
     }
