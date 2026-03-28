@@ -683,7 +683,9 @@ def compute_reachable_cells(
     hero_occupied = {other.cell for other in players if other.name != player.name}
     enemy_occupied = {
         enemy_cell
-        for enemy_cell in (enemy.get("cell") for enemy in enemies)
+        for enemy in enemies
+        if not enemy.get("dying")
+        for enemy_cell in (enemy.get("cell"),)
         if isinstance(enemy_cell, tuple) and len(enemy_cell) == 2
     }
     start = player.cell
@@ -1151,7 +1153,9 @@ def collect_opaque_cells(
     }
     enemy_cells = {
         cell
-        for cell in (enemy.get("cell") for enemy in enemies)
+        for enemy in enemies
+        if not enemy.get("dying")
+        for cell in (enemy.get("cell"),)
         if isinstance(cell, tuple) and len(cell) == 2
     }
     return blocked_cells | hero_cells | enemy_cells
