@@ -2436,7 +2436,7 @@ def main() -> int:
                                 hero = players[defender_idx]
                                 hero.hp = int(outcome["defender_hp_after"])
                                 if outcome["defender_dead"]:
-                                    dying_sound = str(getattr(hero, "dying_sound", ""))
+                                    dying_sound = hero.dying_sound
                                     if dying_sound:
                                         audio_mod.play_named_sound(dying_sound)
                                     hero.dying = True

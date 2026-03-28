@@ -23,6 +23,7 @@ class PlayerClass:
     icon_file: str
     color: tuple[int, int, int]
     cell: tuple[int, int]
+    dying_sound: str = ""
     dying: bool = False
     death_start: int = 0
 
@@ -42,6 +43,7 @@ class PlayerClass:
             icon_file=str(data["icon_file"]),
             color=tuple(data["color"]),
             cell=(int(raw_cell[0]), int(raw_cell[1])),
+            dying_sound=str(data.get("dying_sound", "")),
         )
 
 def load_players() -> list[PlayerClass]:
