@@ -3,6 +3,7 @@ name: Build Windows EXE
 on:
   push:
     branches: ["main"]
+    tags: ["v*"]         # trigger on version tags like v1.0, v1.2.3
   pull_request:
     branches: ["main"]
   workflow_dispatch:   # allow manual trigger from GitHub UI
@@ -34,3 +35,11 @@ jobs:
           name: HeroQuest-windows
           path: dist/HeroQuest.exe
           if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/HeroQuest.exe
+          name: "HeroQuest ${{ github.ref_name }}"
+          body: "Windows standalone build — no installation needed, just run HeroQuest.exe"
