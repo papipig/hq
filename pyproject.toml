@@ -7,7 +7,7 @@ name = "hq"
 version = "0.1.0"
 description = "Unofficial HeroQuest-inspired pygame prototype"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "pygame>=2.6,<3",
 ]

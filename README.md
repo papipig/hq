@@ -64,13 +64,6 @@ You can also start it with:
 python -m main
 ```
 
-## Notes
-
-- Put sound effects and music in `assets/audio/`.
-- Put sprites, tiles, and interface graphics in `assets/graphics/`.
-- Put quest definitions and map data in `data/`.
-- Put design notes and source tracking for assets in `docs/`.
-
 ## Disclaimer
 
 This repository is an unofficial fan project and prototype. It is not owned by, approved by, endorsed by, sponsored by, or affiliated with Hasbro, Avalon Hill, HeroQuest, Milton Bradley, Games Workshop, Stephen Baker, or the original creators and publishers of HeroQuest.

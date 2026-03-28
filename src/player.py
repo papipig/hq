@@ -23,6 +23,8 @@ class PlayerClass:
     icon_file: str
     color: tuple[int, int, int]
     cell: tuple[int, int]
+    dying: bool = False
+    death_start: int = 0
 
     def icon_path(self) -> pathlib.Path:
         return SPRITES_DIR / self.icon_file
