@@ -1165,7 +1165,9 @@ def reveal_room_from_opened_door(
     visible_objects: set[ObjectInstanceKey],
     visible_doors: set[DoorKey],
     visible_enemies: set[int],
+    secret_door_keys: set[DoorKey] | None = None,
 ) -> None:
+    secret_door_keys = secret_door_keys or set()
     col, row, direction = opened_door
     starts = {(col, row)}
     delta_col, delta_row = DIR_OFFSETS[direction]
@@ -1200,7 +1202,18 @@ def reveal_room_from_opened_door(
                     continue
                 break
 
-    # Doors are discovered by LOS adjacency in update_visibility_from_player.
+    # Reveal all non-secret doors that border the revealed room.
+    # A door borders the room if either of the two cells it sits between is
+    # inside room_cells. This catches doors declared on the far wall of the
+    # room whose own cell technically belongs to an adjacent corridor/room.
+    for door_key in door_states:
+        if door_key in secret_door_keys:
+            continue
+        d_col, d_row, d_dir = door_key
+        d_delta_col, d_delta_row = DIR_OFFSETS[d_dir]
+        door_cells = {(d_col, d_row), (d_col + d_delta_col, d_row + d_delta_row)}
+        if door_cells & room_cells:
+            visible_doors.add(door_key)
 
     for enemy_index, enemy in enumerate(enemies):
         cell = enemy.get("cell")
@@ -2602,6 +2615,7 @@ def main() -> int | str:
                             visible_objects,
                             visible_doors,
                             visible_enemies,
+                            secret_door_keys,
                         )
                         update_visibility_from_player(
                             active_player,
