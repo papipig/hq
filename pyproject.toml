@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-hq-game = "main:main"
+hq-game = "main:run"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

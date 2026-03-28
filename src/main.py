@@ -2200,7 +2200,56 @@ def run_splash(
         pygame.display.flip()
 
 
-def main() -> int:
+def run_game_over(screen: pygame.Surface, clock: pygame.time.Clock) -> None:
+    """Display a full-screen GAME OVER overlay and wait for a key or click."""
+    ww, wh = screen.get_size()
+    title_font = pygame.font.SysFont("freesansbold", 72)
+    sub_font = pygame.font.SysFont("freesansbold", 28)
+
+    overlay = pygame.Surface((ww, wh), pygame.SRCALPHA)
+    overlay.fill((10, 5, 5, 220))
+
+    title_surf = title_font.render("GAME OVER", True, (210, 40, 40))
+    sub_surf = sub_font.render("Press any key or click to restart", True, ACCENT_COLOR)
+    title_rect = title_surf.get_rect(center=(ww // 2, wh // 2 - 40))
+    sub_rect = sub_surf.get_rect(center=(ww // 2, wh // 2 + 40))
+
+    # Fade in
+    fade_ms = 800
+    elapsed = 0
+    while elapsed < fade_ms:
+        dt = clock.tick(60)
+        elapsed += dt
+        alpha = min(220, int(220 * elapsed / fade_ms))
+        overlay.set_alpha(alpha)
+        screen.fill(BACKGROUND_COLOR)
+        screen.blit(overlay, (0, 0))
+        screen.blit(title_surf, title_rect)
+        screen.blit(sub_surf, sub_rect)
+        pygame.display.flip()
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                raise SystemExit(0)
+
+    # Wait for input
+    waiting = True
+    while waiting:
+        clock.tick(60)
+        screen.fill(BACKGROUND_COLOR)
+        screen.blit(overlay, (0, 0))
+        screen.blit(title_surf, title_rect)
+        screen.blit(sub_surf, sub_rect)
+        pygame.display.flip()
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                raise SystemExit(0)
+            if event.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN):
+                waiting = False
+
+
+def main() -> int | str:
     parser = argparse.ArgumentParser()
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     args = parser.parse_args()
@@ -3005,6 +3054,9 @@ def main() -> int:
                 # adjust active player index if necessary
                 if active_player_index >= len(players):
                     active_player_index = max(0, len(players) - 1)
+            # All heroes are dead — game over.
+            if not players:
+                running = False
 
         # Draw movement dice at the BOTTOM of the left menu panel so they
         # appear anchored to the menu. Controls (buttons) keep their
@@ -3130,9 +3182,26 @@ def main() -> int:
 
     if audio_mod.audio_enabled:
         pygame.mixer.music.stop()
+
+    if not players:
+        # All heroes died — show game over screen then restart.
+        run_game_over(screen, clock)
+        return "restart"
+
     pygame.quit()
     return 0
 
 
+def run() -> None:
+    """Entry point for the hq-game console script."""
+    while True:
+        result = main()
+        if result != "restart":
+            raise SystemExit(result)
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    while True:
+        result = main()
+        if result != "restart":
+            raise SystemExit(result)
