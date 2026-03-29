@@ -78,6 +78,46 @@ COMBAT_DIE_FACES = ("skull", "skull", "skull", "human_shield", "human_shield", "
 DEATH_ANIM_MS = 2000
 
 
+def _build_room_cell_lookup() -> dict[tuple[int, int], frozenset[tuple[int, int]]]:
+    """Return a mapping of every room cell → frozenset of all cells in that room.
+
+    Used by flood_fill_room to constrain BFS to a single defined room so that
+    the flood never leaks into corridors or adjacent rooms.
+    """
+    data_file = SRC_DIR.parent / "data" / "maps" / "dungeon.json"
+    if not data_file.exists():
+        return {}
+    with data_file.open() as _f:
+        _payload = json.load(_f)
+    lookup: dict[tuple[int, int], frozenset[tuple[int, int]]] = {}
+    for room_entry in _payload.get("rooms", []):
+        if not isinstance(room_entry, list) or not room_entry:
+            continue
+        # Each entry is a list of [[col_min,row_min],[col_max,row_max]] rects.
+        room_cells: set[tuple[int, int]] = set()
+        for rect in room_entry:
+            if not isinstance(rect, list) or len(rect) != 2:
+                continue
+            ul, lr = rect[0], rect[1]
+            if not (isinstance(ul, list) and isinstance(lr, list)):
+                continue
+            c_min, r_min = int(ul[0]), int(ul[1])
+            c_max, r_max = int(lr[0]), int(lr[1])
+            for r in range(r_min, r_max + 1):
+                for c in range(c_min, c_max + 1):
+                    room_cells.add((c, r))
+        frozen = frozenset(room_cells)
+        for cell in room_cells:
+            lookup[cell] = frozen
+    return lookup
+
+
+# Maps every cell that belongs to a defined room → frozenset of that room's cells.
+# Cells NOT in this dict are corridor/void cells.
+_ROOM_CELLS_BY_CELL: dict[tuple[int, int], frozenset[tuple[int, int]]] = (
+    _build_room_cell_lookup()
+)
+
 def door_wall_rect(board: Board, col: int, row: int, direction: str) -> pygame.Rect:
     cell_rect = board.cell_rect(col, row)
     door_length = max(8, int(round(board.cell_size * 0.72)))
@@ -1176,29 +1216,33 @@ def collect_opaque_cells(
     return blocked_cells | hero_cells | enemy_cells
 
 
-def reveal_room_from_opened_door(
-    opened_door: DoorKey,
+def flood_fill_room(
+    start: tuple[int, int],
     door_states: dict[DoorKey, bool],
-    object_definitions: list[GameObjectDefinition],
-    enemies: list[dict],
-    visible_objects: set[ObjectInstanceKey],
-    visible_doors: set[DoorKey],
-    visible_enemies: set[int],
-    secret_door_keys: set[DoorKey] | None = None,
-) -> None:
-    secret_door_keys = secret_door_keys or set()
-    col, row, direction = opened_door
-    starts = {(col, row)}
-    delta_col, delta_row = DIR_OFFSETS[direction]
-    other = (col + delta_col, row + delta_row)
-    if dungeon_map.in_bounds(other[0], other[1]):
-        starts.add(other)
+) -> set[tuple[int, int]]:
+    """BFS flood-fill from *start*, constrained to the room that contains it.
+
+    If *start* is inside a defined room (from dungeon.json) the BFS is bounded
+    to that room's rectangle(s) — the fill never leaks into corridors or
+    adjacent rooms even when no physical wall separates them.
+
+    If *start* is in a corridor (not in any defined room) only that single cell
+    is returned — corridors are discovered step-by-step as the player walks,
+    not revealed in bulk when a door is opened.
+    """
+    # If the start cell is a corridor cell, return just that one cell.
+    allowed: frozenset[tuple[int, int]] | None = _ROOM_CELLS_BY_CELL.get(start)
+    if allowed is None:
+        return {start} if dungeon_map.in_bounds(start[0], start[1]) else set()
 
     room_cells: set[tuple[int, int]] = set()
-    queue = list(starts)
+    queue = [start]
     while queue:
         c, r = queue.pop(0)
         if (c, r) in room_cells or not dungeon_map.in_bounds(c, r):
+            continue
+        # Stay within the room's defined rectangle(s).
+        if (c, r) not in allowed:
             continue
         room_cells.add((c, r))
         for dir_name, (dc, dr) in DIR_OFFSETS.items():
@@ -1209,7 +1253,21 @@ def reveal_room_from_opened_door(
                 continue
             if (nc, nr) not in room_cells:
                 queue.append((nc, nr))
+    return room_cells
 
+
+def reveal_room_cells(
+    room_cells: set[tuple[int, int]],
+    door_states: dict[DoorKey, bool],
+    object_definitions: list[GameObjectDefinition],
+    enemies: list[dict],
+    visible_objects: set[ObjectInstanceKey],
+    visible_doors: set[DoorKey],
+    visible_enemies: set[int],
+    secret_door_keys: set[DoorKey],
+) -> None:
+    """Given a pre-computed set of room cells, reveal all non-secret doors,
+    objects and enemies that touch those cells."""
     for definition in object_definitions:
         for placement_index, placement in enumerate(definition.placements):
             for dx in range(placement.size[0]):
@@ -1221,16 +1279,16 @@ def reveal_room_from_opened_door(
                     continue
                 break
 
-    # Reveal all non-secret doors that border the revealed room.
-    # A door borders the room if either of the two cells it sits between is
-    # inside room_cells. This catches doors declared on the far wall of the
-    # room whose own cell technically belongs to an adjacent corridor/room.
     for door_key in door_states:
         if door_key in secret_door_keys:
             continue
         d_col, d_row, d_dir = door_key
-        d_delta_col, d_delta_row = DIR_OFFSETS[d_dir]
-        door_cells = {(d_col, d_row), (d_col + d_delta_col, d_row + d_delta_row)}
+        d_dc, d_dr = DIR_OFFSETS[d_dir]
+        # A door is revealed when EITHER of its two bordering cells is in the
+        # visible room.  This is necessary because the anchor cell (d_col, d_row)
+        # is not always on the room side – e.g. a door declared at (3,18) dir=N
+        # has its anchor outside the starting room while (3,17) is inside it.
+        door_cells = {(d_col, d_row), (d_col + d_dc, d_row + d_dr)}
         if door_cells & room_cells:
             visible_doors.add(door_key)
 
@@ -1238,6 +1296,82 @@ def reveal_room_from_opened_door(
         cell = enemy.get("cell")
         if isinstance(cell, tuple) and len(cell) == 2 and cell in room_cells:
             visible_enemies.add(enemy_index)
+
+
+def reveal_room_from_opened_door(
+    opened_door: DoorKey,
+    door_states: dict[DoorKey, bool],
+    object_definitions: list[GameObjectDefinition],
+    enemies: list[dict],
+    visible_objects: set[ObjectInstanceKey],
+    visible_doors: set[DoorKey],
+    visible_enemies: set[int],
+    secret_door_keys: set[DoorKey] | None = None,
+    player_cell: tuple[int, int] | None = None,
+) -> set[tuple[int, int]]:
+    """Flood-fill the room on the far side of *opened_door* and reveal it.
+
+    Returns the set of room cells so the caller can update ``visited_cells``
+    (used by the fog-of-war overlay) to clear the fog for the entire room.
+    """
+    secret_door_keys = secret_door_keys or set()
+    col, row, direction = opened_door
+    delta_col, delta_row = DIR_OFFSETS[direction]
+    far_cell = (col + delta_col, row + delta_row)
+    near_cell = (col, row)
+
+    # Start the flood from the far side of the door (the newly revealed room).
+    # If the player is somehow on the far side already, flood from near side.
+    if player_cell is not None and player_cell == far_cell:
+        start = near_cell
+    else:
+        start = far_cell if dungeon_map.in_bounds(far_cell[0], far_cell[1]) else near_cell
+
+    room_cells = flood_fill_room(start, door_states)
+    reveal_room_cells(
+        room_cells,
+        door_states,
+        object_definitions,
+        enemies,
+        visible_objects,
+        visible_doors,
+        visible_enemies,
+        secret_door_keys,
+    )
+    return room_cells
+
+
+def reveal_starting_room(
+    player_cell: tuple[int, int],
+    door_states: dict[DoorKey, bool],
+    object_definitions: list[GameObjectDefinition],
+    enemies: list[dict],
+    visible_objects: set[ObjectInstanceKey],
+    visible_doors: set[DoorKey],
+    visible_enemies: set[int],
+    secret_door_keys: set[DoorKey],
+) -> set[tuple[int, int]]:
+    """Reveal the room (flood-fill) a player starts in at game start.
+
+    This gives players immediate sight of all non-secret doors, objects and
+    enemies in their starting room — matching the board-game rule that you
+    always know your own starting area.
+
+    Returns the set of room cells so the caller can update ``visited_cells``
+    (used by the fog-of-war overlay) to clear the fog for the entire room.
+    """
+    room_cells = flood_fill_room(player_cell, door_states)
+    reveal_room_cells(
+        room_cells,
+        door_states,
+        object_definitions,
+        enemies,
+        visible_objects,
+        visible_doors,
+        visible_enemies,
+        secret_door_keys,
+    )
+    return room_cells
 
 
 def update_visibility_from_player(
@@ -1268,18 +1402,17 @@ def update_visibility_from_player(
             if footprint_visible:
                 visible_objects.add((definition.object_id, placement_index))
 
-    for door_key in door_states.keys():
-        # Never auto-reveal hidden (secret) doors — they must be found via
-        # the "Search for Secret Doors" action.
-        if secret_door_keys and door_key in secret_door_keys:
+    # Reveal doors when either bordering cell is within LOS.
+    # Closed doors and walls block LOS, so the far side of a closed door in
+    # another room is never reachable — the either-cell rule is therefore safe
+    # and mirrors the same rule used in reveal_room_cells().
+    secret_door_keys = secret_door_keys or set()
+    for door_key in door_states:
+        if door_key in secret_door_keys:
             continue
-        col, row, direction = door_key
-        adjacent = {(col, row)}
-        delta_col, delta_row = DIR_OFFSETS[direction]
-        other = (col + delta_col, row + delta_row)
-        if dungeon_map.in_bounds(other[0], other[1]):
-            adjacent.add(other)
-        if any(cell in visible_cells for cell in adjacent):
+        d_col, d_row, d_dir = door_key
+        d_dc, d_dr = DIR_OFFSETS[d_dir]
+        if (d_col, d_row) in visible_cells or (d_col + d_dc, d_row + d_dr) in visible_cells:
             visible_doors.add(door_key)
 
     for enemy_index, enemy in enumerate(enemies):
@@ -1311,6 +1444,84 @@ def draw_unseen_cells_overlay(
                 continue
             rect = board.cell_rect(col, row)
             pygame.draw.rect(overlay, color, rect)
+    screen.blit(overlay, (0, 0))
+
+
+def draw_fog_of_war(
+    screen: pygame.Surface,
+    board: Board,
+    visited_cells: set[tuple[int, int]],
+    solid_rock_cells: set[tuple[int, int]],
+) -> None:
+    """Draw a semi-transparent gray veil over every cell that has never been
+    seen by any player.  Solid-rock cells are skipped — they are already
+    covered by the rock overlay and should never be revealed anyway.
+
+    The overlay is rendered by filling the entire board area with fog first,
+    then punching out transparent holes for visited cells.  Each hole is
+    expanded by ``WALL_BLEED`` pixels so that wall-artwork in the background
+    image is fully concealed until the player has seen the adjacent cell.
+    A soft feathered border is drawn around each hole so the fog edge blurs
+    gradually rather than cutting off sharply.
+    """
+    WALL_BLEED = max(2, board.cell_size // 16)
+    FOG_COLOR = (30, 30, 30, 210)
+
+    # Feather steps: (extra_shrink_px, alpha) painted INSIDE the hole border.
+    # Going from the fog edge inward, alpha drops to 0 over several pixels.
+    FEATHER_R = max(3, board.cell_size // 16)   # radius of the soft zone
+    fog_alpha = FOG_COLOR[3]
+    feather_steps = [
+        (i, int(fog_alpha * (FEATHER_R - i) / FEATHER_R))
+        for i in range(FEATHER_R)
+    ]
+
+    board_fog = pygame.Surface((board.rect.width, board.rect.height), pygame.SRCALPHA)
+    board_fog.fill(FOG_COLOR)
+
+    for row in range(GRID_ROWS):
+        for col in range(GRID_COLS):
+            if (col, row) not in visited_cells:
+                continue
+            if (col, row) in solid_rock_cells:
+                continue
+            cell_rect = board.cell_rect(col, row)
+            bx = cell_rect.x - board.rect.x
+            by = cell_rect.y - board.rect.y
+            bw = cell_rect.width
+            bh = cell_rect.height
+
+            # Fully transparent core (hole).
+            core = pygame.Rect(
+                bx - WALL_BLEED,
+                by - WALL_BLEED,
+                bw + 2 * WALL_BLEED,
+                bh + 2 * WALL_BLEED,
+            )
+            pygame.draw.rect(board_fog, (0, 0, 0, 0), core)
+
+            # Feathered halo: concentric rectangles around the hole edge,
+            # each slightly smaller (going outward into fog), fading to full
+            # fog opacity.  Drawn with a rounded-rect for a softer look.
+            for shrink, alpha in feather_steps:
+                halo = pygame.Rect(
+                    core.x - FEATHER_R + shrink,
+                    core.y - FEATHER_R + shrink,
+                    core.width  + 2 * (FEATHER_R - shrink),
+                    core.height + 2 * (FEATHER_R - shrink),
+                )
+                # Only paint the halo ring pixels, not the already-clear core.
+                pygame.draw.rect(
+                    board_fog,
+                    (FOG_COLOR[0], FOG_COLOR[1], FOG_COLOR[2], alpha),
+                    halo,
+                    width=1,
+                    border_radius=max(1, shrink),
+                )
+
+    overlay = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 0))
+    overlay.blit(board_fog, board.rect.topleft)
     screen.blit(overlay, (0, 0))
 
 
@@ -2348,6 +2559,9 @@ def main() -> int | str:
     visible_objects: set[ObjectInstanceKey] = set()
     visible_doors: set[DoorKey] = set()
     visible_enemies: set[int] = set()
+    # Accumulates every cell ever seen by any player — used for the fog-of-war
+    # gray veil drawn over cells that have never been visited.
+    visited_cells: set[tuple[int, int]] = set()
 
     # temporary: load quest #1
     if True:
@@ -2424,6 +2638,22 @@ def main() -> int | str:
             visible_objects.add((definition.object_id, placement_index))
 
     for player in players:
+        # Reveal the room each hero starts in (doors, objects, enemies).
+        # Capture the room_cells so we can pre-populate visited_cells, which
+        # drives the fog-of-war overlay (cleared fog = cells the player has seen).
+        starting_room_cells = reveal_starting_room(
+            player.cell,
+            door_states,
+            object_definitions,
+            enemies,
+            visible_objects,
+            visible_doors,
+            visible_enemies,
+            secret_door_keys,
+        )
+        visited_cells.update(starting_room_cells)
+        # Also run LOS-based visibility so objects/enemies in the starting room
+        # are correctly marked visible for the first frame.
         update_visibility_from_player(
             player,
             players,
@@ -2644,7 +2874,7 @@ def main() -> int | str:
                         audio_mod.play_sfx("door_open")
                         # A secret door becomes a normal door once opened.
                         secret_door_keys.discard(opened_door)
-                        reveal_room_from_opened_door(
+                        revealed_room_cells = reveal_room_from_opened_door(
                             opened_door,
                             door_states,
                             object_definitions,
@@ -2653,7 +2883,10 @@ def main() -> int | str:
                             visible_doors,
                             visible_enemies,
                             secret_door_keys,
+                            active_player.cell,
                         )
+                        # Clear the fog of war for the newly revealed room.
+                        visited_cells.update(revealed_room_cells)
                         update_visibility_from_player(
                             active_player,
                             players,
@@ -3018,6 +3251,7 @@ def main() -> int | str:
 
         opaque_cells = collect_opaque_cells(players, enemies, exclude_player_name=active_player.name)
         current_visible_cells = compute_visible_cells(active_player.cell, door_states, opaque_cells)
+        visited_cells.update(current_visible_cells)
 
         board.draw()
         if args.debug and los_debug_overlay and not reveal_all:
@@ -3025,6 +3259,8 @@ def main() -> int | str:
         draw_solid_rock_overlay(screen, board, solid_rock_cells)
         draw_objects_on_board(screen, board, object_definitions, object_sprites, visible_objects, reveal_all)
         draw_doors_on_board(screen, board, door_states, door_sprites, visible_doors, reveal_all, secret_door_keys, secret_door_reveal_times)
+        if not reveal_all:
+            draw_fog_of_war(screen, board, visited_cells, solid_rock_cells)
         draw_move_options(screen, board, turn_state["reachable_cells"])
         active_player_name = players[active_player_index].name
         attackable_enemy_indexes = set(turn_state["attack_candidates"]) if turn_state["mode"] == "attack_target" else set()
