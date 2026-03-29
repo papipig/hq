@@ -13,6 +13,7 @@ What is implemented:
 * movements
 * combats
 * enemy AI
+* multi-language support (currently en and fr)
 * hidden doors
 
 What needs to be implemented:
@@ -20,7 +21,6 @@ What needs to be implemented:
 * traps
 * chest, treasures
 * multiplayer mode
-* multi-language
 * quest editor
 * other quests
 
@@ -61,8 +61,19 @@ hq-game
 You can also start it with:
 
 ```bash
-python src/main.py
+python src/main.py --lang=fr   # French
+python src/main.py --lang=en   # English (default)
+python src/main.py             # uses config.json "lang" value
+
+options:
+  -h, --help       show this help message and exit
+  --debug          Enable debug mode
+  --lang LANG      Language override (en, fr, …)
+  --fullscreen     Force fullscreen mode
+  --no-fullscreen  Force windowed mode
 ```
+
+File `src/config.json` contains some configurable parameters (like language or fullscreen).
 
 ## Disclaimer
 

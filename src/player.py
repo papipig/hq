@@ -6,6 +6,8 @@ import pathlib
 
 import pygame
 
+import localization
+
 SRC_DIR = pathlib.Path(__file__).parent
 DATA_FILE = SRC_DIR.parent / "data" / "characters.json"
 SPRITES_DIR = SRC_DIR.parent / "assets" / "graphics" / "sprites"
@@ -29,6 +31,10 @@ class PlayerClass:
 
     def icon_path(self) -> pathlib.Path:
         return SPRITES_DIR / self.icon_file
+
+    def display_name(self) -> str:
+        """Return the localised display name for this hero."""
+        return localization.translate_name(self.name, prefix="char")
 
     @classmethod
     def from_dict(cls, data: dict) -> "PlayerClass":
@@ -77,7 +83,7 @@ def load_player_icon(player: PlayerClass, size: int, font: pygame.font.Font) -> 
 
     surface = pygame.Surface((size, size))
     surface.fill(player.color)
-    label = font.render(player.name[0], True, (245, 240, 230))
+    label = font.render(player.display_name()[0], True, (245, 240, 230))
     label_rect = label.get_rect(center=(size // 2, size // 2))
     surface.blit(label, label_rect)
     return surface

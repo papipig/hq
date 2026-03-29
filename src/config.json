@@ -4,13 +4,15 @@
         "SPLASH_FADE_MS": 500,
         "FULLSCREEN": true,
         "MUSIC": true,
-        "SOUNDS": true
+        "SOUNDS": true,
+        "lang": "en"
     },
     "debug": {
         "SPLASH_DURATION_MS": 0,
         "SPLASH_FADE_MS": 0,
         "FULLSCREEN": true,
         "MUSIC": false,
-        "SOUNDS": true
+        "SOUNDS": true,
+        "lang": "en"
     }
 }

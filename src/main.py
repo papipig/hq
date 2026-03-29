@@ -9,6 +9,8 @@ from typing import TypeAlias
 import pygame
 
 import audio as audio_mod
+import localization
+from localization import t, translate_name
 
 from board import (
     Board,
@@ -49,6 +51,17 @@ ACTIONS = [
     "SEARCH FOR TRAPS",
     "DISARM A TRAP"
 ]
+
+# Maps each ACTIONS entry (uppercase) to its localization key so that button
+# labels are translated while the internal logic strings stay in English.
+ACTION_LOCALE_KEYS: dict[str, str] = {
+    "ATTACK":                   "action.attack",
+    "CAST SPELL":               "action.cast_spell",
+    "SEARCH FOR TREASURE":      "action.search_treasure",
+    "SEARCH FOR SECRET DOORS":  "action.search_doors",
+    "SEARCH FOR TRAPS":         "action.search_traps",
+    "DISARM A TRAP":            "action.disarm_trap",
+}
 
 SRC_DIR = pathlib.Path(__file__).parent
 ASSETS_DIR = SRC_DIR.parent / "assets"
@@ -494,7 +507,7 @@ def draw_left_menu(
     pygame.draw.rect(screen, PANEL_BG, panel_rect)
     pygame.draw.line(screen, ACCENT_COLOR, panel_rect.topright, panel_rect.bottomright, 2)
 
-    title = title_font.render("Characters", True, ACCENT_COLOR)
+    title = title_font.render(t("sidebar.characters"), True, ACCENT_COLOR)
     screen.blit(title, (panel_rect.x + 16, panel_rect.y + 16))
 
     y = panel_rect.y + 64
@@ -514,7 +527,7 @@ def draw_left_menu(
         if is_active:
             marker = pygame.Rect(row.x + 8, row.y + 8, 10, row_h - 16)
             pygame.draw.rect(screen, ACCENT_COLOR, marker, border_radius=5)
-            turn_badge = text_font.render("TURN", True, ACCENT_COLOR)
+            turn_badge = text_font.render(t("badge.turn"), True, ACCENT_COLOR)
             turn_rect = turn_badge.get_rect(topright=(row.right - 10, row.y + 8))
             screen.blit(turn_badge, turn_rect)
 
@@ -535,7 +548,7 @@ def draw_left_menu(
             2,
         )
 
-        name = text_font.render(hero.name, True, TEXT_COLOR if is_active else INACTIVE_TEXT_COLOR)
+        name = text_font.render(hero.display_name(), True, TEXT_COLOR if is_active else INACTIVE_TEXT_COLOR)
         text_x = icon_rect.right + 16
         screen.blit(name, (text_x, row.y + 9))
 
@@ -548,21 +561,22 @@ def draw_left_menu(
 
         if hovered:
             tooltip_lines = [
-                hero.name,
-                f"Attack dice: {hero.attack_dice}",
-                f"Defense dice: {hero.defense_dice}",
-                f"Mind: {hero.mind}",
-                f"Body: {hp}/{max_hp}",
+                hero.display_name(),
+                t("tooltip.attack_dice").format(value=hero.attack_dice),
+                t("tooltip.defense_dice").format(value=hero.defense_dice),
+                t("tooltip.mind").format(value=hero.mind),
+                t("tooltip.body").format(current=hp, maximum=max_hp),
             ]
 
         y += row_h + 10
 
-    enemies_title = title_font.render("Enemies", True, ACCENT_COLOR)
+    enemies_title = title_font.render(t("sidebar.enemies"), True, ACCENT_COLOR)
     screen.blit(enemies_title, (panel_rect.x + 16, y + 8))
     y += 44
 
     for enemy in enemy_menu_rows:
-        enemy_name = str(enemy["name"])
+        enemy_name = str(enemy["name"])          # internal key — used for identity
+        enemy_display = translate_name(str(enemy.get("display_name", enemy_name)), prefix="enemy")
         is_acting = zargon_turn and enemy_name == zargon_acting_enemy_name
         row = pygame.Rect(panel_rect.x + 12, y, panel_rect.width - 24, 64)
         hovered = row.collidepoint(mouse_pos)
@@ -579,7 +593,7 @@ def draw_left_menu(
         if is_acting:
             marker = pygame.Rect(row.x + 8, row.y + 6, 10, row.height - 12)
             pygame.draw.rect(screen, (210, 60, 60), marker, border_radius=5)
-            turn_badge = text_font.render("ACT", True, (210, 60, 60))
+            turn_badge = text_font.render(t("badge.act"), True, (210, 60, 60))
             turn_rect = turn_badge.get_rect(topright=(row.right - 10, row.y + 8))
             screen.blit(turn_badge, turn_rect)
 
@@ -590,7 +604,7 @@ def draw_left_menu(
         circle_width = 3 if is_acting else 2
         pygame.draw.circle(screen, circle_color, icon_rect.center, icon_rect.width // 2 + 2, circle_width)
 
-        label = text_font.render(enemy_name, True, TEXT_COLOR)
+        label = text_font.render(enemy_display, True, TEXT_COLOR)
         screen.blit(label, (icon_rect.right + 12, row.y + 7))
 
         hp = int(enemy.get("hp", enemy.get("max_hp", 1)))
@@ -603,12 +617,12 @@ def draw_left_menu(
 
         if hovered:
             tooltip_lines = [
-                enemy_name,
-                f"Move: {enemy.get('move', 0)}",
-                f"Attack dice: {enemy.get('attack_dice', 0)}",
-                f"Defense dice: {enemy.get('defense_dice', 0)}",
-                f"Mind: {enemy.get('mind', 0)}",
-                f"Body: {hp}/{max_hp}",
+                enemy_display,
+                t("tooltip.move").format(value=enemy.get('move', 0)),
+                t("tooltip.attack_dice").format(value=enemy.get('attack_dice', 0)),
+                t("tooltip.defense_dice").format(value=enemy.get('defense_dice', 0)),
+                t("tooltip.mind").format(value=enemy.get('mind', 0)),
+                t("tooltip.body").format(current=hp, maximum=max_hp),
             ]
 
         y += 72
@@ -869,7 +883,7 @@ def draw_attack_dialog(
     pygame.draw.rect(screen, PANEL_BG, panel, border_radius=14)
     pygame.draw.rect(screen, ACCENT_COLOR, panel, 3, border_radius=14)
 
-    header = title_font.render("Combat", True, ACCENT_COLOR)
+    header = title_font.render(t("combat.title"), True, ACCENT_COLOR)
     screen.blit(header, header.get_rect(midtop=(panel.centerx, panel.top + 16)))
 
     # Two compact columns inside the panel
@@ -887,11 +901,11 @@ def draw_attack_dialog(
 
     # Support both PlayerClass (hero) and dict (enemy) as attacker.
     if isinstance(attacker, dict):
-        atk_display_name = str(attacker.get("display_name", attacker.get("name", "Enemy")))
+        atk_display_name = translate_name(str(attacker.get("display_name", attacker.get("name", "Enemy"))), prefix="enemy")
     else:
-        atk_display_name = attacker.name
+        atk_display_name = attacker.display_name()
     atk_name = text_font.render(atk_display_name, True, TEXT_COLOR)
-    def_name = text_font.render(str(defender.get("display_name", defender.get("name", "Enemy"))), True, TEXT_COLOR)
+    def_name = text_font.render(translate_name(str(defender.get("display_name", defender.get("name", "Enemy")))), True, TEXT_COLOR)
     screen.blit(atk_name, atk_name.get_rect(midtop=(left_col.centerx, left_col.top + 106)))
     screen.blit(def_name, def_name.get_rect(midtop=(right_col.centerx, right_col.top + 106)))
 
@@ -955,29 +969,30 @@ def draw_attack_dialog(
         _draw_dice_row(dialog["outcome"]["defense_rolls"], dialog["defender_rotations"], right_col.centerx, def_center_y)
 
     if phase == 0:
-        result_line = "Auto-rolling…" if auto_advance else "Click to roll attack dice"
+        result_line = t("combat.auto_rolling") if auto_advance else t("combat.roll_attack")
     elif phase == 1:
         skulls = dialog['outcome']['skulls']
         if auto_advance:
-            result_line = f"Enemy rolled {skulls} skull(s) — click to defend!"
+            result_line = t("combat.enemy_rolled").format(skulls=skulls)
         else:
-            result_line = f"Attacker rolled {skulls} skull(s) — rolling defence…"
+            result_line = t("combat.attacker_rolled").format(skulls=skulls)
     else:
-        result_line = (
-            f"Skulls {dialog['outcome']['skulls']}  vs  Saves {dialog['outcome']['saves']}"
-            f"  =>  Damage {dialog['outcome']['damage']}"
+        result_line = t("combat.result").format(
+            skulls=dialog['outcome']['skulls'],
+            saves=dialog['outcome']['saves'],
+            damage=dialog['outcome']['damage'],
         )
     result_txt = text_font.render(result_line, True, ACCENT_COLOR)
     screen.blit(result_txt, result_txt.get_rect(midbottom=(panel.centerx, panel.bottom - 44)))
 
     if auto_advance and phase < 1:
-        click_label = "Auto-rolling…"
+        click_label = t("combat.auto_rolling")
     elif phase == 0:
-        click_label = "Click to attack"
+        click_label = t("combat.click_attack")
     elif phase == 1:
-        click_label = "…"
+        click_label = t("combat.waiting")
     else:
-        click_label = "Click to resolve" if not auto_advance else "Click to resolve"
+        click_label = t("combat.click_resolve")
     click_txt = text_font.render(click_label, True, TEXT_COLOR)
     screen.blit(click_txt, click_txt.get_rect(midbottom=(panel.centerx, panel.bottom - 14)))
 
@@ -1690,29 +1705,31 @@ def draw_turn_controls(
     rects: dict[str, pygame.Rect] = {}
 
     if zargon_active:
-        heading = title_font.render("Zargon's Turn", True, (210, 60, 60))
+        heading = title_font.render(t("zargon.heading"), True, (210, 60, 60))
         screen.blit(heading, (panel_rect.x + 16, start_y + 4))
-        status_surface = text_font.render("Enemies are acting…", True, TEXT_COLOR)
+        status_surface = text_font.render(t("zargon.acting"), True, TEXT_COLOR)
         screen.blit(status_surface, (panel_rect.x + 16, start_y + 40))
         controls_area = pygame.Rect(
             panel_rect.x + 8, start_y, panel_rect.width - 16, 60
         )
         return rects, controls_area
 
-    heading = title_font.render(f"{player.name}'s Turn", True, ACCENT_COLOR)
+    heading = title_font.render(t("hero.turn_heading").format(name=player.display_name()), True, ACCENT_COLOR)
     screen.blit(heading, (panel_rect.x + 16, start_y + 4))
 
-    status_line = "Choose MOVE or ACTION"
+    status_line = t("status.choose_move_action")
     show_dice_roll = turn_state["mode"] == "move"
     if hide_controls:
-        status_line = "Resolve combat"
+        status_line = t("status.resolve_combat")
     if turn_state["mode"] == "action":
-        status_line = "Choose an action"
+        status_line = t("status.choose_action")
     elif turn_state["mode"] == "attack_target":
-        status_line = "Select an adjacent enemy"
+        status_line = t("status.select_enemy")
         hide_controls = True
     elif turn_state["selected_action"]:
-        status_line = f"Action used: {turn_state['selected_action']}"
+        _raw_action = turn_state['selected_action']
+        _action_label = t(ACTION_LOCALE_KEYS.get(_raw_action.upper(), _raw_action))
+        status_line = t("status.action_used").format(action=_action_label)
 
     flags = []
     if flags:
@@ -1738,8 +1755,8 @@ def draw_turn_controls(
     # open we'll render the action list and then place PASS TURN at the end.
     if not controls_open and not hide_controls:
         move_enabled = not turn_state["moved"] and not turn_state["move_locked"]
-        draw_button(screen, move_rect, "MOVE", mouse_pos, text_font, enabled=move_enabled)
-        draw_button(screen, action_rect, "ACTION", mouse_pos, text_font, enabled=not turn_state["acted"])
+        draw_button(screen, move_rect, t("btn.move"), mouse_pos, text_font, enabled=move_enabled)
+        draw_button(screen, action_rect, t("btn.action"), mouse_pos, text_font, enabled=not turn_state["acted"])
 
     action_block_bottom = button_y
     if controls_open and not hide_controls:
@@ -1750,7 +1767,8 @@ def draw_turn_controls(
             rects[f"action_{index}"] = rect
             # ACTIONS list contains uppercase names; compare case-insensitively
             enabled = can_attack if action_name.upper() == "ATTACK" else True
-            draw_button(screen, rect, action_name, mouse_pos, text_font, enabled=enabled)
+            action_label = t(ACTION_LOCALE_KEYS.get(action_name.upper(), action_name))
+            draw_button(screen, rect, action_label, mouse_pos, text_font, enabled=enabled)
 
         # PASS TURN sits after the actions list when open
         pass_y = action_y + len(ACTIONS) * 42 + 12
@@ -1759,7 +1777,7 @@ def draw_turn_controls(
         draw_button(
             screen,
             pass_rect,
-            "PASS TURN",
+            t("btn.pass_turn"),
             mouse_pos,
             text_font,
             enabled=True,
@@ -1777,7 +1795,7 @@ def draw_turn_controls(
             draw_button(
                 screen,
                 pass_rect,
-                "PASS TURN",
+                t("btn.pass_turn"),
                 mouse_pos,
                 text_font,
                 enabled=True,
@@ -1846,7 +1864,7 @@ def load_enemy_icon(enemy: dict, size: int, font: pygame.font.Font) -> pygame.Su
     surface = pygame.Surface((size, size))
     color = tuple(enemy.get("color", [220, 40, 40]))
     surface.fill(color)
-    label = font.render(str(enemy.get("display_name", enemy.get("name", "?")))[:1], True, (245, 240, 230))
+    label = font.render(translate_name(str(enemy.get("display_name", enemy.get("name", "?"))))[:1], True, (245, 240, 230))
     label_rect = label.get_rect(center=(size // 2, size // 2))
     surface.blit(label, label_rect)
     return surface
@@ -2226,8 +2244,8 @@ def run_game_over(screen: pygame.Surface, clock: pygame.time.Clock) -> None:
     overlay = pygame.Surface((ww, wh), pygame.SRCALPHA)
     overlay.fill((10, 5, 5, 220))
 
-    title_surf = title_font.render("GAME OVER", True, (210, 40, 40))
-    sub_surf = sub_font.render("Press any key or click to restart", True, ACCENT_COLOR)
+    title_surf = title_font.render(t("gameover.title"), True, (210, 40, 40))
+    sub_surf = sub_font.render(t("gameover.subtitle"), True, ACCENT_COLOR)
     title_rect = title_surf.get_rect(center=(ww // 2, wh // 2 - 40))
     sub_rect = sub_surf.get_rect(center=(ww // 2, wh // 2 + 40))
 
@@ -2269,9 +2287,24 @@ def run_game_over(screen: pygame.Surface, clock: pygame.time.Clock) -> None:
 def main() -> int | str:
     parser = argparse.ArgumentParser()
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+    parser.add_argument("--lang", default=None, help="Language override (en, fr, …)")
+    fs_group = parser.add_mutually_exclusive_group()
+    fs_group.add_argument("--fullscreen", action="store_true", default=None,
+                          help="Force fullscreen mode")
+    fs_group.add_argument("--no-fullscreen", action="store_true", default=None,
+                          help="Force windowed mode")
     args = parser.parse_args()
 
     cfg = _load_config(args.debug)
+
+    # CLI --lang overrides config.json value
+    localization.init_locale(args.lang or cfg.get("lang", "en"))
+
+    # CLI --fullscreen / --no-fullscreen overrides config.json value
+    if args.fullscreen:
+        cfg["FULLSCREEN"] = True
+    elif args.no_fullscreen:
+        cfg["FULLSCREEN"] = False
 
     pygame.init()
 
@@ -2973,8 +3006,8 @@ def main() -> int | str:
                             "defender_rotations": roll_dice_rotations(len(outcome["defense_rolls"])),
                             "attacker_icon": attacker_icon,
                             "defender_icon": defender_icon,
-                            "attacker_name": str(enemy.get("display_name", enemy.get("name", "Enemy"))),
-                            "defender_name": hero.name,
+                            "attacker_name": translate_name(str(enemy.get("display_name", enemy.get("name", "Enemy"))), prefix="enemy"),
+                            "defender_name": hero.display_name(),
                         }
                         zs["dialog_phase_start"] = now
                         zs["phase"] = "dialog"
@@ -3160,7 +3193,7 @@ def main() -> int | str:
                 # it in the "defender" column (which expects a dict).
                 hero_as_dict = {
                     "name": hero.name,
-                    "display_name": hero.name,
+                    "display_name": hero.display_name(),
                     "attack_dice": hero.attack_dice,
                     "defense_dice": hero.defense_dice,
                     "hp": hero.hp,
