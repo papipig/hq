@@ -1467,14 +1467,9 @@ def draw_fog_of_war(
     WALL_BLEED = max(2, board.cell_size // 16)
     FOG_COLOR = (30, 30, 30, 210)
 
-    # Feather steps: (extra_shrink_px, alpha) painted INSIDE the hole border.
-    # Going from the fog edge inward, alpha drops to 0 over several pixels.
-    FEATHER_R = max(3, board.cell_size // 16)   # radius of the soft zone
+    # Feather zone: pixels of soft gradient from transparent → full fog.
+    FEATHER_R = max(4, board.cell_size // 8)
     fog_alpha = FOG_COLOR[3]
-    feather_steps = [
-        (i, int(fog_alpha * (FEATHER_R - i) / FEATHER_R))
-        for i in range(FEATHER_R)
-    ]
 
     board_fog = pygame.Surface((board.rect.width, board.rect.height), pygame.SRCALPHA)
     board_fog.fill(FOG_COLOR)
@@ -1491,33 +1486,30 @@ def draw_fog_of_war(
             bw = cell_rect.width
             bh = cell_rect.height
 
-            # Fully transparent core (hole).
+            # The fully-transparent core including wall bleed.
             core = pygame.Rect(
                 bx - WALL_BLEED,
                 by - WALL_BLEED,
                 bw + 2 * WALL_BLEED,
                 bh + 2 * WALL_BLEED,
             )
-            pygame.draw.rect(board_fog, (0, 0, 0, 0), core)
 
-            # Feathered halo: concentric rectangles around the hole edge,
-            # each slightly smaller (going outward into fog), fading to full
-            # fog opacity.  Drawn with a rounded-rect for a softer look.
-            for shrink, alpha in feather_steps:
+            # Feathered halo: draw filled rects from outermost (most opaque)
+            # to innermost (transparent), so later draws overwrite earlier ones.
+            # Using BLEND_RGBA_MIN ensures we only ever lower the alpha of pixels
+            # that are already fogged — holes punched by neighbouring cells are
+            # never re-fogged.
+            for i in range(FEATHER_R, -1, -1):
+                alpha = int(fog_alpha * i / FEATHER_R)
                 halo = pygame.Rect(
-                    core.x - FEATHER_R + shrink,
-                    core.y - FEATHER_R + shrink,
-                    core.width  + 2 * (FEATHER_R - shrink),
-                    core.height + 2 * (FEATHER_R - shrink),
+                    core.x - i,
+                    core.y - i,
+                    core.width  + 2 * i,
+                    core.height + 2 * i,
                 )
-                # Only paint the halo ring pixels, not the already-clear core.
-                pygame.draw.rect(
-                    board_fog,
-                    (FOG_COLOR[0], FOG_COLOR[1], FOG_COLOR[2], alpha),
-                    halo,
-                    width=1,
-                    border_radius=max(1, shrink),
-                )
+                halo_surf = pygame.Surface((halo.width, halo.height), pygame.SRCALPHA)
+                halo_surf.fill((FOG_COLOR[0], FOG_COLOR[1], FOG_COLOR[2], alpha))
+                board_fog.blit(halo_surf, halo.topleft, special_flags=pygame.BLEND_RGBA_MIN)
 
     overlay = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
     overlay.fill((0, 0, 0, 0))
